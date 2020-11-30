@@ -47,6 +47,7 @@ public class LoadDriver {
 		String cbUrl = "localhost";
 		String bucketname = "travel-sample";
 		String keys[] = { "airport_1254" };
+		String fetchType = "kv";
 		List<String> keysList=new ArrayList<>();
 
 		while (argc < args.length) {
@@ -82,6 +83,8 @@ public class LoadDriver {
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--ascontent".equals(args[argc]))
 				asContent = Boolean.valueOf(args[++argc]);
+			else if ("--fetchtype".equals(args[argc]))
+				fetchType = args[++argc];
 			else {
 				usage();
 				System.err.println(" unsupported option: "+args[argc]);
@@ -121,7 +124,7 @@ public class LoadDriver {
 		for (int i = 0; i < nThreads; i++) {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			threads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond, timeoutUs,
-					thresholdUs, latch, null, baseTime, false, false, false, asContent);
+					thresholdUs, latch, null, baseTime, false, false, false, asContent, !fetchType.equals("query"), cluster);
 			(new ThreadWrapper(threads[i])).start();
 		}
 
@@ -248,6 +251,7 @@ public class LoadDriver {
 		System.err.println("	--logmax <true|false>");
 		System.err.println("	--logthreshold <true|false>");
 		System.err.println("	--key <key> [ --key <key> ...]");
+		System.err.println("  --fetchtype [ kv | query ] # CREATE INDEX `def_id` ON `travel-sample`(`id`) ");
 	}
 
 	// Thread that runs the run() of another Thread

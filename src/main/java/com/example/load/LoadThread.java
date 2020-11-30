@@ -5,8 +5,11 @@ import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
+import com.couchbase.client.java.json.JsonArray;
 import com.couchbase.client.java.kv.GetOptions;
 import com.couchbase.client.java.kv.GetResult;
+import com.couchbase.client.java.query.QueryOptions;
+import com.couchbase.client.java.query.QueryResult;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -29,6 +32,7 @@ public class LoadThread extends Thread {
 	boolean logTimeout;
 	boolean logThreshold;
 	boolean asContent;
+	boolean kvFetch;
 
 	long count = 0;
 	long sum = 0;
@@ -72,7 +76,9 @@ public class LoadThread extends Thread {
 	}
 
 	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname, String[] keys, long runSeconds,
-			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore, long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asContent) {
+			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
+										long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asContent,
+										boolean kvFetch, Cluster cluster) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -85,15 +91,17 @@ public class LoadThread extends Thread {
 		this.logMax = logMax;
 		this.logThreshold = logThreshold;
 		this.asContent = asContent;
+		this.kvFetch = kvFetch;
+		this.cluster = cluster;
 
 		this.collection = collection;
-		if(this.collection == null) {
-			ClusterOptions options = ClusterOptions.clusterOptions(username, password);
-			cluster = Cluster.connect(cbUrl, options);
+		//if(this.collection == null) {
+		//	ClusterOptions options = ClusterOptions.clusterOptions(username, password);
+		//	cluster = Cluster.connect(cbUrl, options);
 			bucket = cluster.bucket(bucketname);
 			collection = bucket.defaultCollection();
 			bucket.waitUntilReady(Duration.ofSeconds(10));
-		}
+		//}
 		GetResult r = collection.get(keys[0]);
 		if(asContent)
 			r.contentAsObject();
@@ -121,9 +129,19 @@ public class LoadThread extends Thread {
 				timeOffset = System.currentTimeMillis() - baseTime[0];
 				boolean timeoutOccurred=false;
 				try {
-					GetResult r = collection.get(keys[0], options);
-					if(asContent)
-						r.contentAsObject();
+					GetResult r = null;
+					QueryResult qr = null;
+					if (kvFetch )
+						r = collection.get(keys[0], options);
+					else
+						qr = cluster.query("SELECT * from `travel-sample` where id = ?",
+							QueryOptions.queryOptions().parameters(JsonArray.create().add(keys[0].split("_")[1])));
+					if(asContent) {
+						if (r != null)
+							r.contentAsObject();
+						if (qr != null)
+							qr.rowsAsObject();
+					}
 				} catch (UnambiguousTimeoutException e) {
 					timeoutOccurred=true;
 				}
