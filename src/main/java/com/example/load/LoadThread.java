@@ -3,11 +3,14 @@ package com.example.load;
 import com.couchbase.client.core.error.UnambiguousTimeoutException;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
-import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
+import com.couchbase.client.java.CommonOptions;
 import com.couchbase.client.java.json.JsonArray;
+import com.couchbase.client.java.json.JsonObject;
 import com.couchbase.client.java.kv.GetOptions;
 import com.couchbase.client.java.kv.GetResult;
+import com.couchbase.client.java.kv.InsertOptions;
+import com.couchbase.client.java.kv.MutationResult;
 import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryResult;
 
@@ -15,6 +18,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 
@@ -32,7 +36,9 @@ public class LoadThread extends Thread {
 	boolean logTimeout;
 	boolean logThreshold;
 	boolean asContent;
-	boolean kvFetch;
+	boolean kvGet;
+	boolean kvInsert;
+	int messageSize;
 
 	long count = 0;
 	long sum = 0;
@@ -76,9 +82,9 @@ public class LoadThread extends Thread {
 	}
 
 	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname, String[] keys, long runSeconds,
-			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
+										int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
 										long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asContent,
-										boolean kvFetch, Cluster cluster) {
+										boolean kvGet, boolean kvInsert, int messageSize, Cluster cluster) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -91,7 +97,9 @@ public class LoadThread extends Thread {
 		this.logMax = logMax;
 		this.logThreshold = logThreshold;
 		this.asContent = asContent;
-		this.kvFetch = kvFetch;
+		this.kvGet = kvGet;
+		this.kvInsert = kvInsert;
+		this.messageSize = messageSize;
 		this.cluster = cluster;
 
 		this.collection = collection;
@@ -102,21 +110,40 @@ public class LoadThread extends Thread {
 			collection = bucket.defaultCollection();
 			bucket.waitUntilReady(Duration.ofSeconds(10));
 		//}
-		GetResult r = collection.get(keys[0]);
-		if(asContent)
-			r.contentAsObject();
+		//GetResult r = collection.get(keys[0]);
+		//if(asContent)
+		//	r.contentAsObject();
 	}
+
+	public static boolean first = true;
 
 	public void run() {
 		long timeOffset=0;
 		try {
 			endTime = System.currentTimeMillis() + runSeconds * 1000;
-			GetOptions options = GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs*1000));
+			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000));
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
 			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
+			String uuid = UUID.randomUUID().toString();
+			uuid = uuid.substring(uuid.lastIndexOf("-")+1);
 			count=0;
 			sum=0;
+			JsonObject message = JsonObject.jo();
+			if (kvInsert) {
+				List<String> keyList = new LinkedList<>();
+				for (int i = 0; message.toString().length() < messageSize -10; i++) {
+					String key = String.format("%1$" + 2 + "d", i).replace(" ", "0");
+					String value = String.format("%1$" + 100 + "s", "x");
+					message.put(key, value);
+				}
+				if (first) {
+					first = false;
+					System.err.println("message length is: " + message.toString().length());
+				}
+			}
+
 			while (System.currentTimeMillis() < endTime) {
 				if( rateSemaphore != null) {
 					try {
@@ -130,15 +157,22 @@ public class LoadThread extends Thread {
 				boolean timeoutOccurred=false;
 				try {
 					GetResult r = null;
+					MutationResult mr = null;
 					QueryResult qr = null;
-					if (kvFetch )
-						r = collection.get(keys[0], options);
+					if (kvGet)
+						r = collection.get(keys[0], (GetOptions) options);
+					else if (kvInsert) {
+						String key = uuid + "_" + String.format("%1$" + 8 + "d", count).replace(" ", "0");
+						mr = collection.insert(key, message, (InsertOptions) options);
+					}
 					else
 						qr = cluster.query("SELECT * from `travel-sample` where id = ?",
 							QueryOptions.queryOptions().parameters(JsonArray.create().add(keys[0].split("_")[1])));
 					if(asContent) {
 						if (r != null)
 							r.contentAsObject();
+						if (mr != null)
+							mr.mutationToken();
 						if (qr != null)
 							qr.rowsAsObject();
 					}

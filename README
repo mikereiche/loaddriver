@@ -1,3 +1,6 @@
+Load Driver application that runs against travel-sample bucket, _default scope, or bucket supplied by --bucket.
+Delete indexes so you don't have to compete with indexing.
+
 mvn package
 
 java  -jar target/loaddriver-0.0.1-SNAPSHOT.jar --runseconds 10 --thresholdmicroseconds 5000 --timeoutmicroseconds 40000 --threads 8

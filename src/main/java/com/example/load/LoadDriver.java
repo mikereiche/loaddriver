@@ -1,8 +1,5 @@
 package com.example.load;
 
-//import org.slf4j.Logger;
-//import org.slf4j.LoggerFactory;
-//import ch.qos.logback.classic.Level;
 import java.util.logging.Logger;
 
 
@@ -27,14 +24,12 @@ import java.util.concurrent.Semaphore;
 public class LoadDriver {
 	static Logger logger = Logger.getLogger("com.couchbase");
 	public static void main(String[] args) {
-		//ch.qos.logback.classic.Logger l=(ch.qos.logback.classic.Logger)logger;
-		//l.setLevel(Level.INFO);
-
 		int argc = 0;
 		int nThreads = 4;
 		int nRequestsPerSecond = 0;
 		int runSeconds = 10;
 		int timeoutUs = 40000;
+		int messageSize = 1024;
 		long thresholdUs = -1;
 		int nKvConnections = 1;
 		boolean logTimeout=true;
@@ -47,7 +42,8 @@ public class LoadDriver {
 		String cbUrl = "localhost";
 		String bucketname = "travel-sample";
 		String keys[] = { "airport_1254" };
-		String fetchType = "kv";
+		String operationType = "get";
+		List<String> operationTypes = List.of("get", "insert", "query");
 		List<String> keysList=new ArrayList<>();
 
 		while (argc < args.length) {
@@ -65,6 +61,8 @@ public class LoadDriver {
 				gcIntervalMs = Integer.parseInt(args[++argc]);
 			else if ("--kvconnections".equals(args[argc]))
 				nKvConnections = Integer.parseInt(args[++argc]);
+			else if ("--messagesize".equals(args[argc]))
+				messageSize = Integer.parseInt(args[++argc]);
 			else if ("--url".equals(args[argc]))
 				cbUrl = args[++argc];
 			else if ("--username".equals(args[argc]))
@@ -83,8 +81,12 @@ public class LoadDriver {
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--ascontent".equals(args[argc]))
 				asContent = Boolean.valueOf(args[++argc]);
-			else if ("--fetchtype".equals(args[argc]))
-				fetchType = args[++argc];
+			else if ("--operationtype".equals(args[argc])) {
+				operationType = args[++argc];
+				if (!operationTypes.contains(operationType)) {
+					throw new RuntimeException("operation type must be one of " + operationTypes);
+				}
+			}
 			else {
 				usage();
 				System.err.println(" unsupported option: "+args[argc]);
@@ -124,7 +126,8 @@ public class LoadDriver {
 		for (int i = 0; i < nThreads; i++) {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			threads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond, timeoutUs,
-					thresholdUs, latch, null, baseTime, false, false, false, asContent, !fetchType.equals("query"), cluster);
+					thresholdUs, latch, null, baseTime, false, false, false, asContent, operationType.equals("get"),
+					operationType.equals("insert"), messageSize, cluster);
 			(new ThreadWrapper(threads[i])).start();
 		}
 
@@ -243,6 +246,8 @@ public class LoadDriver {
 		System.err.println("	--timeoutmicroseconds <n>");
 		System.err.println("	--thresholdmicroseconds <n>");
 		System.err.println("	--gcintervalmilliseconds <n>");
+		System.err.println("	--kvconnections <n>");
+		System.err.println("	--messagesize <n>");
 		System.err.println("	--url <url>");
 		System.err.println("	--username <username>");
 		System.err.println("	--password <password>");
@@ -251,7 +256,7 @@ public class LoadDriver {
 		System.err.println("	--logmax <true|false>");
 		System.err.println("	--logthreshold <true|false>");
 		System.err.println("	--key <key> [ --key <key> ...]");
-		System.err.println("  --fetchtype [ kv | query ] # CREATE INDEX `def_id` ON `travel-sample`(`id`) ");
+		System.err.println("	--operationtype [ get | insert | query ] # CREATE INDEX `def_id` ON `travel-sample`(`id`) ");
 	}
 
 	// Thread that runs the run() of another Thread
