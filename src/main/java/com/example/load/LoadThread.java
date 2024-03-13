@@ -1,5 +1,6 @@
 package com.example.load;
 
+import com.couchbase.client.core.error.DocumentExistsException;
 import com.couchbase.client.core.error.UnambiguousTimeoutException;
 import com.couchbase.client.core.msg.kv.MutationToken;
 import com.couchbase.client.java.Bucket;
@@ -8,6 +9,8 @@ import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.CommonOptions;
 import com.couchbase.client.java.json.JsonArray;
 import com.couchbase.client.java.json.JsonObject;
+import com.couchbase.client.java.kv.ExistsOptions;
+import com.couchbase.client.java.kv.ExistsResult;
 import com.couchbase.client.java.kv.GetOptions;
 import com.couchbase.client.java.kv.GetResult;
 import com.couchbase.client.java.kv.InsertOptions;
@@ -15,6 +18,7 @@ import com.couchbase.client.java.kv.MutationResult;
 import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryResult;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.AbstractList;
@@ -25,6 +29,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class LoadThread extends Thread {
 	long endTime;
@@ -45,8 +50,9 @@ public class LoadThread extends Thread {
 	int messageSize;
 	boolean reactive;
 	int batchSize;
+	boolean countMaxInParallel;
 
-	long count = 0;
+	int count = 0;
 	long sum = 0;
 	Recording maxRecording;
 
@@ -92,7 +98,8 @@ public class LoadThread extends Thread {
 	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname, String[] keys, long runSeconds,
 										int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
 										long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asContent,
-			boolean kvGet, boolean kvInsert, int messageSize, boolean reactive, int batchSize, Cluster cluster) {
+			boolean kvGet, boolean kvInsert, int messageSize, boolean reactive, int batchSize,
+			boolean countMaxInParallel, Cluster cluster) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -110,6 +117,7 @@ public class LoadThread extends Thread {
 		this.messageSize = messageSize;
 		this.reactive = reactive;
 		this.batchSize = batchSize;
+		this.countMaxInParallel = countMaxInParallel;
 		this.cluster = cluster;
 
 		this.collection = collection;
@@ -123,6 +131,9 @@ public class LoadThread extends Thread {
 		bucket.waitUntilReady(Duration.ofSeconds(10));
 
 	}
+
+	static final AtomicLong requestsInParallel = new AtomicLong();
+	public static final AtomicLong maxRequestsInParallel = new AtomicLong();
 
 	public void run() {
 		long timeOffset=0;
@@ -138,14 +149,27 @@ public class LoadThread extends Thread {
 			count=0;
 			sum=0;
 			JsonObject message = JsonObject.jo();
-			if (kvInsert) {
+			if (kvInsert || (kvGet && (keys == null || keys.length == 1))) {
 				List<String> keyList = new LinkedList<>();
 				for (int i = 0; message.toString().length() < messageSize -10; i++) {
-					String key = String.format("%1$" + 2 + "d", i).replace(" ", "0");
-					String value = String.format("%1$" + 100 + "s", "x");
+					String key = String.format("%1$" + 4 + "d", i).replace(" ", "0");
+					String value = String.format("%1$" + 100 + "s", "x").replace(" ", "x");
 					message.put(key, value);
 				}
-				if (first) {
+				if (kvGet) {
+					if (keys != null && keys.length == 1) {
+						ExistsResult exr = collection.exists(keys[0], ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+						if (!exr.exists()) {
+							try {
+								collection.insert(keys[0], message,
+									InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+								System.err.println("message length is: " + message.toString().length());
+							} catch( DocumentExistsException dee){
+								// ignore - there are a bunch of threads doing this
+							}
+						}
+					}
+				} else if (first) {
 					first = false;
 					System.err.println("message length is: " + message.toString().length());
 				}
@@ -167,31 +191,64 @@ public class LoadThread extends Thread {
 					if (kvGet) {
 						if (reactive) {
 							count++;
-							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> collection.reactive()
-									.get(keys[0], (GetOptions) options))
-								.map( r -> r.contentAsObject()).collectList()
-								.block();
+							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> {
+								if (countMaxInParallel
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									maxRequestsInParallel.set(requestsInParallel.get());
+								}
+								Mono<GetResult> mrMono = collection.reactive().get(keys[count % keys.length],
+										(GetOptions) options);
+								return mrMono;
+							}).map(mr -> {
+								if (countMaxInParallel)
+									requestsInParallel.decrementAndGet();
+								return asContent ? mr.contentAsObject() : JsonObject.create();
+							}).collectList().block();
+
 						} else {
+							if (countMaxInParallel
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+								maxRequestsInParallel.set(requestsInParallel.get());
+							}
 							count++;
-							GetResult r = collection.get(keys[0], (GetOptions) options);
-							r.contentAsObject();
+							GetResult r = collection.get(keys[count % keys.length], (GetOptions) options);
+							if (countMaxInParallel)
+								requestsInParallel.decrementAndGet();
+							if (asContent)
+								r.contentAsObject();
 						}
 					}
 					else if (kvInsert) {
 						if (reactive) {
-							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> collection.reactive()
-									.insert(key(uuid, count++), message, (InsertOptions) options))
-								.map( mr -> mr.mutationToken()).collectList()
+							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> {
+								if (countMaxInParallel
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									maxRequestsInParallel.set(requestsInParallel.get());
+								}
+								Mono<MutationResult> mrMono = collection.reactive().insert(key(uuid, count++), message,
+										(InsertOptions) options);
+								return mrMono;
+							}).map(mr -> {
+								if (countMaxInParallel)
+									requestsInParallel.decrementAndGet();
+								return mr.mutationToken();
+							}).collectList()
 									.block();
 						} else {
+							if (countMaxInParallel
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+								maxRequestsInParallel.set(requestsInParallel.get());
+							}
 							MutationResult mr = collection.insert(key(uuid, count++), message, (InsertOptions) options);
+							if (countMaxInParallel)
+								requestsInParallel.decrementAndGet();
 							mr.mutationToken();
 						}
-					}
-					else {
+					} else {
 						count++;
 						QueryResult qr = cluster.query("SELECT * from `travel-sample` where id = ?",
-							QueryOptions.queryOptions().parameters(JsonArray.create().add(keys[0].split("_")[1])));
+								QueryOptions.queryOptions()
+										.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {

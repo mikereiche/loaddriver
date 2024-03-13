@@ -38,6 +38,7 @@ public class LoadDriver {
 		boolean logMax=false;
 		boolean logThreshold=true;
 		boolean asContent=false;
+		boolean countMaxInParallel = false;
 		long gcIntervalMs=0;
 		String username = "Administrator";
 		String password = "password";
@@ -83,6 +84,8 @@ public class LoadDriver {
 				logTimeout = Boolean.valueOf(args[++argc]);
 			else if ("--logmax".equals(args[argc]))
 				logMax = Boolean.valueOf(args[++argc]);
+			else if ("--countmaxinparallel".equals(args[argc]))
+				countMaxInParallel = Boolean.valueOf(args[++argc]);
 			else if ("--logthreshold".equals(args[argc]))
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--ascontent".equals(args[argc]))
@@ -133,7 +136,7 @@ public class LoadDriver {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			threads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asContent, operationType.equals("get"),
-					operationType.equals("insert"), messageSize, reactive, batchSize, cluster);
+					operationType.equals("insert"), messageSize, reactive, batchSize, countMaxInParallel, cluster);
 			(new ThreadWrapper(threads[i])).start();
 		}
 
@@ -187,6 +190,7 @@ public class LoadDriver {
 		}
 
 		System.out.println("===================  RESULTS  ========================");
+		if(countMaxInParallel)System.out.println("maxInRequestsInParallel: "+LoadThread.maxRequestsInParallel);
 
 		long count = 0;
 		Recording max = new Recording() ;
@@ -262,6 +266,7 @@ public class LoadDriver {
 		System.err.println("	--bucket <bucket>");
 		System.err.println("	--logtimeout <true|false>");
 		System.err.println("	--logmax <true|false>");
+		System.err.println("	--countmaxinparallel <true|false>");
 		System.err.println("	--logthreshold <true|false>");
 		System.err.println("	--key <key> [ --key <key> ...]");
 		System.err.println("	--operationtype [ get | insert | query ] # CREATE INDEX `def_id` ON `travel-sample`(`id`) ");
