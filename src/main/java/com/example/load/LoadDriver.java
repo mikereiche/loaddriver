@@ -30,6 +30,8 @@ public class LoadDriver {
 		int runSeconds = 10;
 		int timeoutUs = 40000;
 		int messageSize = 1024;
+		boolean reactive = false;
+		int  batchSize=100;
 		long thresholdUs = -1;
 		int nKvConnections = 1;
 		boolean logTimeout=true;
@@ -63,6 +65,10 @@ public class LoadDriver {
 				nKvConnections = Integer.parseInt(args[++argc]);
 			else if ("--messagesize".equals(args[argc]))
 				messageSize = Integer.parseInt(args[++argc]);
+			else if ("--batchsize".equals(args[argc]))
+				batchSize = Integer.parseInt(args[++argc]);
+			else if ("--reactive".equals(args[argc]))
+				reactive = Boolean.valueOf(args[++argc]);
 			else if ("--url".equals(args[argc]))
 				cbUrl = args[++argc];
 			else if ("--username".equals(args[argc]))
@@ -127,7 +133,7 @@ public class LoadDriver {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			threads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asContent, operationType.equals("get"),
-					operationType.equals("insert"), messageSize, cluster);
+					operationType.equals("insert"), messageSize, reactive, batchSize, cluster);
 			(new ThreadWrapper(threads[i])).start();
 		}
 
@@ -215,8 +221,8 @@ public class LoadDriver {
 		System.out.println("MAX: "+max);
 		System.out.println("========================================================");
 		//printClusterEndpoints(cluster);
-		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms\n",
-				runSeconds, threads.length, timeoutUs, thresholdUs , nRequestsPerSecond, nRequestsPerSecond == 0 ? "(max)":"", gcIntervalMs);
+		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, reactive: %b, reactive batchSize: %d\n",
+				runSeconds, threads.length, timeoutUs, thresholdUs , nRequestsPerSecond, nRequestsPerSecond == 0 ? "(max)":"", gcIntervalMs, reactive, reactive ? batchSize : 1);
 		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, aggregate rq/s: %d\n",
 				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, 1000000000/(sum/count/threads.length));
 
@@ -248,6 +254,8 @@ public class LoadDriver {
 		System.err.println("	--gcintervalmilliseconds <n>");
 		System.err.println("	--kvconnections <n>");
 		System.err.println("	--messagesize <n>");
+		System.err.println("	--batchSize <n>");
+		System.err.println("	--reactive <true|false>");
 		System.err.println("	--url <url>");
 		System.err.println("	--username <username>");
 		System.err.println("	--password <password>");
