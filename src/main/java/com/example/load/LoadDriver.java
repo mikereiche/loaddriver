@@ -30,6 +30,7 @@ public class LoadDriver {
 		int runSeconds = 10;
 		int timeoutUs = 40000;
 		int messageSize = 1024;
+		int schedulerThreadCount = 0;
 		boolean reactive = false;
 		int  batchSize=100;
 		long thresholdUs = -1;
@@ -44,7 +45,7 @@ public class LoadDriver {
 		String password = "password";
 		String cbUrl = "localhost";
 		String bucketname = "travel-sample";
-		String keys[] = { "airport_1254" };
+		String keys[] = { "000" };
 		String operationType = "get";
 		List<String> operationTypes = List.of("get", "insert", "query");
 		List<String> keysList=new ArrayList<>();
@@ -66,6 +67,8 @@ public class LoadDriver {
 				nKvConnections = Integer.parseInt(args[++argc]);
 			else if ("--messagesize".equals(args[argc]))
 				messageSize = Integer.parseInt(args[++argc]);
+			else if ("--schedulerthreadcount".equals(args[argc]))
+				schedulerThreadCount  = Integer.parseInt(args[++argc]);
 			else if ("--batchsize".equals(args[argc]))
 				batchSize = Integer.parseInt(args[++argc]);
 			else if ("--reactive".equals(args[argc]))
@@ -110,9 +113,12 @@ public class LoadDriver {
 		if(!keysList.isEmpty())
 			keys = (String[])keysList.toArray(new String[]{});
 
-		ClusterEnvironment env = ClusterEnvironment.builder()
-				.ioConfig(IoConfig.numKvConnections(nKvConnections))
-				.build();
+		int nKvConns = nKvConnections;
+		ClusterEnvironment.Builder builder = ClusterEnvironment.builder()
+				.ioConfig(io -> io.numKvConnections(nKvConns));
+                if(schedulerThreadCount != 0)
+			builder.schedulerThreadCount(schedulerThreadCount);
+		ClusterEnvironment env = builder.build();
 		ClusterOptions options = ClusterOptions.clusterOptions(username, password);
 
 		Cluster cluster = Cluster.connect(cbUrl, options.environment(env));
@@ -193,17 +199,21 @@ public class LoadDriver {
 		if(countMaxInParallel)System.out.println("maxInRequestsInParallel: "+LoadThread.maxRequestsInParallel);
 
 		long count = 0;
+		long threadCount=0;
 		Recording max = new Recording() ;
 		List<Recording> allRecordings=new ArrayList<>();
 		long sum=0;
 		for (int i = 0; i < nThreads; i++) {
+			if(threads[i].getCount() == 0 )
+				continue;
+			threadCount++;
 			allRecordings.addAll(threads[i].getRecordings("timeouts"));
 			allRecordings.addAll(threads[i].getRecordings("thresholds"));
 			Recording avg=threads[i].getRecording("average");
 			// aggregate the counts
 			count += threads[i].getCount();
 			// reconstitute the total execution time and aggregate
-			sum = sum +avg.count * avg.value;
+			sum = sum + avg.count * avg.value;
 			// save the max of all threads
 			max = threads[i].getRecording("max").getValue() > max.getValue() ? threads[i].getRecording("max") : max;
 		}
@@ -227,8 +237,12 @@ public class LoadDriver {
 		//printClusterEndpoints(cluster);
 		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, reactive: %b, reactive batchSize: %d\n",
 				runSeconds, threads.length, timeoutUs, thresholdUs , nRequestsPerSecond, nRequestsPerSecond == 0 ? "(max)":"", gcIntervalMs, reactive, reactive ? batchSize : 1);
-		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, aggregate rq/s: %d\n",
-				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, 1000000000/(sum/count/threads.length));
+		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d\n",
+				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, count/runSeconds/threadCount /* 1000000000/(sum/count/threadCount)*/);
+
+		System.err.println("sum: "+sum);
+		System.err.println("count: "+count);
+		System.err.println("threads: "+threadCount);
 
 	}
 

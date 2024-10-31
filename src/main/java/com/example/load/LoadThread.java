@@ -1,10 +1,12 @@
 package com.example.load;
 
 import com.couchbase.client.core.error.DocumentExistsException;
+import com.couchbase.client.core.error.DocumentNotFoundException;;
 import com.couchbase.client.core.error.UnambiguousTimeoutException;
 import com.couchbase.client.core.msg.kv.MutationToken;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
+import com.couchbase.client.java.codec.RawJsonTranscoder;
 import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.CommonOptions;
 import com.couchbase.client.java.json.JsonArray;
@@ -15,6 +17,7 @@ import com.couchbase.client.java.kv.GetOptions;
 import com.couchbase.client.java.kv.GetResult;
 import com.couchbase.client.java.kv.InsertOptions;
 import com.couchbase.client.java.kv.MutationResult;
+import com.couchbase.client.java.kv.RemoveOptions;
 import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryResult;
 import reactor.core.publisher.Flux;
@@ -29,6 +32,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class LoadThread extends Thread {
@@ -62,7 +67,7 @@ public class LoadThread extends Thread {
 
 	public HashMap<String, List<Recording>> recordings = new HashMap<>();
 
-	public static boolean first = true; // just print message length one time
+	public static AtomicBoolean first = new AtomicBoolean(true); // just print message length one time
 
 	public long getCount(){
 		return count;
@@ -92,7 +97,8 @@ public class LoadThread extends Thread {
 	}
 
 	public Recording getRecording(String key) {
-		return recordings.get(key).get(0);
+		List<Recording> l = recordings.get(key);
+		return l.get(0); // l != null ? l.get(0) : new Recording();
 	}
 
 	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname, String[] keys, long runSeconds,
@@ -139,8 +145,8 @@ public class LoadThread extends Thread {
 		long timeOffset=0;
 		try {
 			endTime = System.currentTimeMillis() + runSeconds * 1000;
-			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000));
+			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE)
+					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE);
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
 			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
@@ -148,35 +154,51 @@ public class LoadThread extends Thread {
 			final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
 			count=0;
 			sum=0;
-			JsonObject message = JsonObject.jo();
+			JsonObject messageJson = JsonObject.jo();
+			byte[] message;
+			for (int i = 0; messageJson.toBytes().length < messageSize -10; i++) {
+				String key = String.format("%1$" + 4 + "d", i).replace(" ", "0");
+				String value = String.format("%1$" + 100 + "s", "x").replace(" ", "x");
+				messageJson.put(key, value);
+			}
+			message = messageJson.toBytes();
 			if (kvInsert || (kvGet && (keys == null || keys.length == 1))) {
-				List<String> keyList = new LinkedList<>();
-				for (int i = 0; message.toString().length() < messageSize -10; i++) {
-					String key = String.format("%1$" + 4 + "d", i).replace(" ", "0");
-					String value = String.format("%1$" + 100 + "s", "x").replace(" ", "x");
-					message.put(key, value);
-				}
 				if (kvGet) {
-					if (keys != null && keys.length == 1) {
+					if ( first.getAndSet(false) && keys != null && keys.length == 1) {
 						ExistsResult exr = collection.exists(keys[0], ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
-						if (!exr.exists()) {
+						if (exr.exists()) {
 							try {
-								collection.insert(keys[0], message,
-									InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
-								System.err.println("message length is: " + message.toString().length());
-							} catch( DocumentExistsException dee){
+								collection.remove(keys[0],RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+							} catch(DocumentNotFoundException  dnfe){
 								// ignore - there are a bunch of threads doing this
 							}
 						}
+						try {
+							collection.insert(keys[0], message, InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE));
+							System.err.println("Inserted: message length is: " + message.length);
+						} catch(DocumentExistsException dee){
+							// ignore - there are a bunch of threads doing this
+						}
+					} else {
+						do {
+							try {
+								Thread.sleep(50);
+							} catch (InterruptedException  ie){
+								; // ignore
+							}
+						} while (!collection.exists(keys[0], ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000))).exists());
+						
 					}
-				} else if (first) {
-					first = false;
-					System.err.println("message length is: " + message.toString().length());
+				} else if (first.get()) {
+					first.set(false);
+					System.err.println("message length is: " + message.length);
 				}
 			}
 
+			AtomicInteger reactiveCount = new AtomicInteger();
 			while (System.currentTimeMillis() < endTime) {
-				if( rateSemaphore != null) {
+
+				if(rateSemaphore != null) {
 					try {
 						rateSemaphore.acquire();
 					} catch (InterruptedException e) {
@@ -190,7 +212,7 @@ public class LoadThread extends Thread {
 
 					if (kvGet) {
 						if (reactive) {
-							count++;
+							count+=batchSize;
 							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
 										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
@@ -220,12 +242,13 @@ public class LoadThread extends Thread {
 					}
 					else if (kvInsert) {
 						if (reactive) {
+							reactiveCount.set(count);
 							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
 										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
-								Mono<MutationResult> mrMono = collection.reactive().insert(key(uuid, count++), message,
+								Mono<MutationResult> mrMono = collection.reactive().insert(key(uuid, reactiveCount.getAndIncrement()), message,
 										(InsertOptions) options);
 								return mrMono;
 							}).map(mr -> {
@@ -234,6 +257,7 @@ public class LoadThread extends Thread {
 								return mr.mutationToken();
 							}).collectList()
 									.block();
+							count = count + batchSize;
 						} else {
 							if (countMaxInParallel
 									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
@@ -255,7 +279,7 @@ public class LoadThread extends Thread {
 					timeoutOccurred=true;
 				}
 				long rTime = System.nanoTime() - t0;
-				sum+=rTime;
+				sum+=(rTime*batchSize);
 				if (rTime > maxRecording.value) {
 					maxRecording = new Recording(getName(), "mx", count, rTime, timeOffset);
 					List<Recording> l = new LinkedList();
