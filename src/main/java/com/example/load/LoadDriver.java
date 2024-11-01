@@ -194,8 +194,10 @@ public class LoadDriver {
 				}
 				sleep(2);
 			}
-			for (int i = 0; i < loads.length; i++) // kill threads waiting for rateSemaphore
+			for (int i = 0; i < loads.length; i++) { // kill threads waiting for rateSemaphore
+				rateSemaphore.drainPermits();
 				threads[i].interrupt();
+			}
 		}
 
 		try {
@@ -303,6 +305,10 @@ public class LoadDriver {
 		Thread thread;
 
 		public ThreadWrapper(LoadThread runnable, boolean virtualThreads) {
+			if (!virtualThreads) { // short cut 
+				this.thread = new Thread(runnable);
+                                return;
+                        }
 			Method m = null;
 			try {
 				if (virtualThreads) {

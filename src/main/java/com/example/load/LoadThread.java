@@ -156,14 +156,14 @@ public class LoadThread implements Runnable {
 		try {
 			endTime = System.currentTimeMillis() + runSeconds * 1000;
 			CommonOptions options = kvGet
-					? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-							.transcoder(RawJsonTranscoder.INSTANCE)
-					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-							.transcoder(RawJsonTranscoder.INSTANCE);
+				? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+				.transcoder(RawJsonTranscoder.INSTANCE)
+				: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+				.transcoder(RawJsonTranscoder.INSTANCE);
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
 			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than
-																		// ArrayList
+			// ArrayList
 			final String uuidStr = UUID.randomUUID().toString();
 			final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
 			count = 0;
@@ -180,19 +180,19 @@ public class LoadThread implements Runnable {
 				if (kvGet) {
 					if (first.getAndSet(false) && keys != null && keys.length == 1) {
 						ExistsResult exr = collection.exists(keys[0],
-								ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+							ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
 						if (exr.exists()) {
 							try {
 								collection.remove(keys[0],
-										RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+									RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
 							} catch (DocumentNotFoundException dnfe) {
 								// ignore - there are a bunch of threads doing this
 							}
 						}
 						try {
 							collection.insert(keys[0], message,
-									InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-											.transcoder(RawJsonTranscoder.INSTANCE));
+								InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+									.transcoder(RawJsonTranscoder.INSTANCE));
 							System.err.println("Inserted: message length is: " + message.length);
 						} catch (DocumentExistsException dee) {
 							// ignore - there are a bunch of threads doing this
@@ -204,9 +204,9 @@ public class LoadThread implements Runnable {
 							} catch (InterruptedException ie) {
 							}
 						} while (!collection
-								.exists(keys[0],
-										ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)))
-								.exists());
+							.exists(keys[0],
+								ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)))
+							.exists());
 
 					}
 				} else if (first.getAndSet(false)) {
@@ -234,11 +234,11 @@ public class LoadThread implements Runnable {
 							count += batchSize;
 							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
-										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								Mono<GetResult> mrMono = collection.reactive().get(keys[count % keys.length],
-										(GetOptions) options);
+									(GetOptions) options);
 								return mrMono;
 							}).map(mr -> {
 								if (countMaxInParallel)
@@ -248,7 +248,7 @@ public class LoadThread implements Runnable {
 
 						} else {
 							if (countMaxInParallel
-									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+								&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 								maxRequestsInParallel.set(requestsInParallel.get());
 							}
 							count++;
@@ -263,11 +263,11 @@ public class LoadThread implements Runnable {
 							reactiveCount.set(count);
 							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
-										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								Mono<MutationResult> mrMono = collection.reactive().insert(
-										key(uuid, reactiveCount.getAndIncrement()), message, (InsertOptions) options);
+									key(uuid, reactiveCount.getAndIncrement()), message, (InsertOptions) options);
 								return mrMono;
 							}).map(mr -> {
 								if (countMaxInParallel)
@@ -277,7 +277,7 @@ public class LoadThread implements Runnable {
 							count = count + batchSize;
 						} else {
 							if (countMaxInParallel
-									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+								&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 								maxRequestsInParallel.set(requestsInParallel.get());
 							}
 							MutationResult mr = collection.insert(key(uuid, count++), message, (InsertOptions) options);
@@ -288,8 +288,8 @@ public class LoadThread implements Runnable {
 					} else {
 						count++;
 						QueryResult qr = cluster.query("SELECT * from `travel-sample` where id = ?",
-								QueryOptions.queryOptions()
-										.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
+							QueryOptions.queryOptions()
+								.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {
@@ -312,12 +312,15 @@ public class LoadThread implements Runnable {
 						System.out.println(timeout);
 				} else if (rTime > thresholdUs * 1000) { // if already recorded timeout, don't also record threshold
 					Recording threshold = new Recording(getThreadName(), rTime > timeoutUs * 1000 ? "TH" : "th", count, rTime,
-							timeOffset);
+						timeOffset);
 					recordings.get("thresholds").add(threshold);
 					if (logThreshold)
 						System.out.println(threshold);
 				}
 			}
+		} catch(RuntimeException t){
+			if( t.getCause()!= null && !(t.getCause() instanceof InterruptedException) || rateSemaphore == null)
+				throw t;
 		} finally {
 			if (count > 0) {
 				recordings.put("average", new LinkedList<Recording>());
