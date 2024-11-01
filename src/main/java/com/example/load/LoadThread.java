@@ -1,30 +1,9 @@
 package com.example.load;
 
-import com.couchbase.client.core.error.DocumentExistsException;
-import com.couchbase.client.core.error.DocumentNotFoundException;;
-import com.couchbase.client.core.error.UnambiguousTimeoutException;
-import com.couchbase.client.core.msg.kv.MutationToken;
-import com.couchbase.client.java.Bucket;
-import com.couchbase.client.java.Cluster;
-import com.couchbase.client.java.codec.RawJsonTranscoder;
-import com.couchbase.client.java.Collection;
-import com.couchbase.client.java.CommonOptions;
-import com.couchbase.client.java.json.JsonArray;
-import com.couchbase.client.java.json.JsonObject;
-import com.couchbase.client.java.kv.ExistsOptions;
-import com.couchbase.client.java.kv.ExistsResult;
-import com.couchbase.client.java.kv.GetOptions;
-import com.couchbase.client.java.kv.GetResult;
-import com.couchbase.client.java.kv.InsertOptions;
-import com.couchbase.client.java.kv.MutationResult;
-import com.couchbase.client.java.kv.RemoveOptions;
-import com.couchbase.client.java.query.QueryOptions;
-import com.couchbase.client.java.query.QueryResult;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
-import java.util.AbstractList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -36,7 +15,28 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class LoadThread extends Thread {
+import com.couchbase.client.core.error.DocumentExistsException;
+import com.couchbase.client.core.error.DocumentNotFoundException;
+import com.couchbase.client.core.error.UnambiguousTimeoutException;
+import com.couchbase.client.core.msg.kv.MutationToken;
+import com.couchbase.client.java.Bucket;
+import com.couchbase.client.java.Cluster;
+import com.couchbase.client.java.Collection;
+import com.couchbase.client.java.CommonOptions;
+import com.couchbase.client.java.codec.RawJsonTranscoder;
+import com.couchbase.client.java.json.JsonArray;
+import com.couchbase.client.java.json.JsonObject;
+import com.couchbase.client.java.kv.ExistsOptions;
+import com.couchbase.client.java.kv.ExistsResult;
+import com.couchbase.client.java.kv.GetOptions;
+import com.couchbase.client.java.kv.GetResult;
+import com.couchbase.client.java.kv.InsertOptions;
+import com.couchbase.client.java.kv.MutationResult;
+import com.couchbase.client.java.kv.RemoveOptions;
+import com.couchbase.client.java.query.QueryOptions;
+import com.couchbase.client.java.query.QueryResult;
+
+public class LoadThread implements Runnable {
 	long endTime;
 	long runSeconds;
 	int nRequestsPerSecond;
@@ -69,26 +69,31 @@ public class LoadThread extends Thread {
 
 	public static AtomicBoolean first = new AtomicBoolean(true); // just print message length one time
 
-	public long getCount(){
+	public long getCount() {
 		return count;
 	}
 
-	public void setRunSeconds(long runSeconds){
+	public void setRunSeconds(long runSeconds) {
 		this.runSeconds = runSeconds;
 	}
-	public void setRateSemaphore(Semaphore rateSemaphore){
+
+	public void setRateSemaphore(Semaphore rateSemaphore) {
 		this.rateSemaphore = rateSemaphore;
 	}
-	public void setLatch(CountDownLatch latch){
+
+	public void setLatch(CountDownLatch latch) {
 		this.latch = latch;
 	}
-	public void setLogMax(boolean logMax){
+
+	public void setLogMax(boolean logMax) {
 		this.logMax = logMax;
 	}
-	public void setLogThreshold(boolean logThreshold){
+
+	public void setLogThreshold(boolean logThreshold) {
 		this.logThreshold = logThreshold;
 	}
-	public void setLogTimeout(boolean logTimeout){
+
+	public void setLogTimeout(boolean logTimeout) {
 		this.logTimeout = logTimeout;
 	}
 
@@ -101,11 +106,11 @@ public class LoadThread extends Thread {
 		return l.get(0); // l != null ? l.get(0) : new Recording();
 	}
 
-	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname, String[] keys, long runSeconds,
-										int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
-										long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asContent,
-			boolean kvGet, boolean kvInsert, int messageSize, boolean reactive, int batchSize,
-			boolean countMaxInParallel, Cluster cluster) {
+	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname,
+			String[] keys, long runSeconds, int nRequestsPerSecond, long timeoutUs, long thresholdUs,
+			CountDownLatch latch, Semaphore rateSemaphore, long[] baseTime, boolean logTimeout, boolean logMax,
+			boolean logThreshold, boolean asContent, boolean kvGet, boolean kvInsert, int messageSize, boolean reactive,
+			int batchSize, boolean countMaxInParallel, Cluster cluster) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -127,11 +132,11 @@ public class LoadThread extends Thread {
 		this.cluster = cluster;
 
 		this.collection = collection;
-		//if(this.collection == null) { // make a new connection for every thread ???
-		//	ClusterOptions options = ClusterOptions.clusterOptions(username, password);
-		//	cluster = Cluster.connect(cbUrl, options);
-		//	collection = bucket.defaultCollection();
-		//}
+		// if(this.collection == null) { // make a new connection for every thread ???
+		// ClusterOptions options = ClusterOptions.clusterOptions(username, password);
+		// cluster = Cluster.connect(cbUrl, options);
+		// collection = bucket.defaultCollection();
+		// }
 
 		bucket = cluster.bucket(bucketname);
 		bucket.waitUntilReady(Duration.ofSeconds(10));
@@ -141,22 +146,31 @@ public class LoadThread extends Thread {
 	static final AtomicLong requestsInParallel = new AtomicLong();
 	public static final AtomicLong maxRequestsInParallel = new AtomicLong();
 
+	public String getThreadName() {
+		return Thread.currentThread().
+				getName();
+	}
+
 	public void run() {
-		long timeOffset=0;
+		long timeOffset = 0;
 		try {
 			endTime = System.currentTimeMillis() + runSeconds * 1000;
-			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE)
-					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE);
+			CommonOptions options = kvGet
+					? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+							.transcoder(RawJsonTranscoder.INSTANCE)
+					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+							.transcoder(RawJsonTranscoder.INSTANCE);
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
-			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
+			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than
+																		// ArrayList
 			final String uuidStr = UUID.randomUUID().toString();
 			final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
-			count=0;
-			sum=0;
+			count = 0;
+			sum = 0;
 			JsonObject messageJson = JsonObject.jo();
 			byte[] message;
-			for (int i = 0; messageJson.toBytes().length < messageSize -10; i++) {
+			for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
 				String key = String.format("%1$" + 4 + "d", i).replace(" ", "0");
 				String value = String.format("%1$" + 100 + "s", "x").replace(" ", "x");
 				messageJson.put(key, value);
@@ -164,33 +178,38 @@ public class LoadThread extends Thread {
 			message = messageJson.toBytes();
 			if (kvInsert || (kvGet && (keys == null || keys.length == 1))) {
 				if (kvGet) {
-					if ( first.getAndSet(false) && keys != null && keys.length == 1) {
-						ExistsResult exr = collection.exists(keys[0], ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+					if (first.getAndSet(false) && keys != null && keys.length == 1) {
+						ExistsResult exr = collection.exists(keys[0],
+								ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
 						if (exr.exists()) {
 							try {
-								collection.remove(keys[0],RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
-							} catch(DocumentNotFoundException  dnfe){
+								collection.remove(keys[0],
+										RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
+							} catch (DocumentNotFoundException dnfe) {
 								// ignore - there are a bunch of threads doing this
 							}
 						}
 						try {
-							collection.insert(keys[0], message, InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000)).transcoder(RawJsonTranscoder.INSTANCE));
+							collection.insert(keys[0], message,
+									InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+											.transcoder(RawJsonTranscoder.INSTANCE));
 							System.err.println("Inserted: message length is: " + message.length);
-						} catch(DocumentExistsException dee){
+						} catch (DocumentExistsException dee) {
 							// ignore - there are a bunch of threads doing this
 						}
 					} else {
 						do {
 							try {
 								Thread.sleep(50);
-							} catch (InterruptedException  ie){
-								; // ignore
+							} catch (InterruptedException ie) {
 							}
-						} while (!collection.exists(keys[0], ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000))).exists());
-						
+						} while (!collection
+								.exists(keys[0],
+										ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)))
+								.exists());
+
 					}
-				} else if (first.get()) {
-					first.set(false);
+				} else if (first.getAndSet(false)) {
 					System.err.println("message length is: " + message.length);
 				}
 			}
@@ -198,7 +217,7 @@ public class LoadThread extends Thread {
 			AtomicInteger reactiveCount = new AtomicInteger();
 			while (System.currentTimeMillis() < endTime) {
 
-				if(rateSemaphore != null) {
+				if (rateSemaphore != null) {
 					try {
 						rateSemaphore.acquire();
 					} catch (InterruptedException e) {
@@ -207,12 +226,12 @@ public class LoadThread extends Thread {
 				}
 				long t0 = System.nanoTime();
 				timeOffset = System.currentTimeMillis() - baseTime[0];
-				boolean timeoutOccurred=false;
+				boolean timeoutOccurred = false;
 				try {
 
 					if (kvGet) {
 						if (reactive) {
-							count+=batchSize;
+							count += batchSize;
 							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
 										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
@@ -239,8 +258,7 @@ public class LoadThread extends Thread {
 							if (asContent)
 								r.contentAsObject();
 						}
-					}
-					else if (kvInsert) {
+					} else if (kvInsert) {
 						if (reactive) {
 							reactiveCount.set(count);
 							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> {
@@ -248,15 +266,14 @@ public class LoadThread extends Thread {
 										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
-								Mono<MutationResult> mrMono = collection.reactive().insert(key(uuid, reactiveCount.getAndIncrement()), message,
-										(InsertOptions) options);
+								Mono<MutationResult> mrMono = collection.reactive().insert(
+										key(uuid, reactiveCount.getAndIncrement()), message, (InsertOptions) options);
 								return mrMono;
 							}).map(mr -> {
 								if (countMaxInParallel)
 									requestsInParallel.decrementAndGet();
 								return mr.mutationToken();
-							}).collectList()
-									.block();
+							}).collectList().block();
 							count = count + batchSize;
 						} else {
 							if (countMaxInParallel
@@ -276,31 +293,35 @@ public class LoadThread extends Thread {
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {
-					timeoutOccurred=true;
+					timeoutOccurred = true;
 				}
 				long rTime = System.nanoTime() - t0;
-				sum+=(rTime*batchSize);
+				sum += (rTime * batchSize);
 				if (rTime > maxRecording.value) {
-					maxRecording = new Recording(getName(), "mx", count, rTime, timeOffset);
+					maxRecording = new Recording(getThreadName(), "mx", count, rTime, timeOffset);
 					List<Recording> l = new LinkedList();
 					l.add(maxRecording);
 					recordings.put("max", l);
-					if(logMax)System.out.println(maxRecording);
+					if (logMax)
+						System.out.println(maxRecording);
 				}
-				if(timeoutOccurred){
-					Recording timeout=new Recording(getName(), "TO", count, rTime, timeOffset);
+				if (timeoutOccurred) {
+					Recording timeout = new Recording(getThreadName(), "TO", count, rTime, timeOffset);
 					recordings.get("timeouts").add(timeout);
-					if(logTimeout) System.out.println(timeout);
-				}else if (rTime > thresholdUs*1000) { // if already recorded timeout, don't also record threshold
-					Recording threshold  = new Recording(getName(), rTime > timeoutUs*1000 ? "TH" : "th" , count, rTime, timeOffset);
+					if (logTimeout)
+						System.out.println(timeout);
+				} else if (rTime > thresholdUs * 1000) { // if already recorded timeout, don't also record threshold
+					Recording threshold = new Recording(getThreadName(), rTime > timeoutUs * 1000 ? "TH" : "th", count, rTime,
+							timeOffset);
 					recordings.get("thresholds").add(threshold);
-					if(logThreshold)System.out.println(threshold);
+					if (logThreshold)
+						System.out.println(threshold);
 				}
 			}
 		} finally {
-			if(count > 0) {
+			if (count > 0) {
 				recordings.put("average", new LinkedList<Recording>());
-				recordings.get("average").add(new Recording(getName(), "avg", count, sum / count, 999999999));
+				recordings.get("average").add(new Recording(getThreadName(), "avg", count, sum / count, 999999999));
 			}
 			latch.countDown();
 		}

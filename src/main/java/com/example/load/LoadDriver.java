@@ -1,5 +1,8 @@
 package com.example.load;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.concurrent.ThreadFactory;
 import java.util.logging.Logger;
 
 
@@ -40,6 +43,7 @@ public class LoadDriver {
 		boolean logThreshold=true;
 		boolean asContent=false;
 		boolean countMaxInParallel = false;
+		boolean virtualThreads = false;
 		long gcIntervalMs=0;
 		String username = "Administrator";
 		String password = "password";
@@ -73,6 +77,8 @@ public class LoadDriver {
 				batchSize = Integer.parseInt(args[++argc]);
 			else if ("--reactive".equals(args[argc]))
 				reactive = Boolean.valueOf(args[++argc]);
+			else if ("--virtualthreads".equals(args[argc]))
+				virtualThreads = Boolean.valueOf(args[++argc]);
 			else if ("--url".equals(args[argc]))
 				cbUrl = args[++argc];
 			else if ("--username".equals(args[argc]))
@@ -134,16 +140,18 @@ public class LoadDriver {
 		// so that they can be executed concurrently with ThreadWrapper.start()
 		// instead of thread[i].start() [ a thread can only have start() called once ]
 
-		LoadThread[] threads = new LoadThread[nThreads];
+		LoadThread[] loads = new LoadThread[nThreads];
+		Thread[] threads = new Thread[nThreads];
 		CountDownLatch latch = new CountDownLatch(nThreads);
 
 		long[] baseTime = new long[1];
 		for (int i = 0; i < nThreads; i++) {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
-			threads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond, timeoutUs,
+			loads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond,
+					timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asContent, operationType.equals("get"),
 					operationType.equals("insert"), messageSize, reactive, batchSize, countMaxInParallel, cluster);
-			(new ThreadWrapper(threads[i])).start();
+			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
 		try {
@@ -155,7 +163,7 @@ public class LoadDriver {
 
 		System.out.println("wait for idle Endpoints to timeout");
 		sleep(4000); // wait for idle Endpoints to timeout
-		System.out.println("========================================================");
+		System.out.println("======================================================== " + latch.getCount());
 		latch = new CountDownLatch(nThreads);
 		Semaphore rateSemaphore = nRequestsPerSecond == 0 ? null :  new Semaphore(0);
 		baseTime[0]=System.currentTimeMillis();
@@ -164,12 +172,13 @@ public class LoadDriver {
 			new GCThread( gcIntervalMs, runSeconds, baseTime[0] ).start();
 
 		for (int i = 0; i < nThreads; i++) {
-			threads[i].setRunSeconds(runSeconds);
-			threads[i].setLatch(latch);
-			threads[i].setRateSemaphore(rateSemaphore);
-			threads[i].setLogMax(logMax);
-			threads[i].setLogThreshold(logThreshold);
-			threads[i].setLogTimeout(logTimeout);
+			loads[i].setRunSeconds(runSeconds);
+			loads[i].setLatch(latch);
+			loads[i].setRateSemaphore(rateSemaphore);
+			loads[i].setLogMax(logMax);
+			loads[i].setLogThreshold(logThreshold);
+			loads[i].setLogTimeout(logTimeout);
+			threads[i] = new ThreadWrapper(loads[i], virtualThreads);
 			sleep(1);  //stagger the start
 			threads[i].start();
 		}
@@ -185,7 +194,7 @@ public class LoadDriver {
 				}
 				sleep(2);
 			}
-			for (int i = 0; i < threads.length; i++) // kill threads waiting for rateSemaphore
+			for (int i = 0; i < loads.length; i++) // kill threads waiting for rateSemaphore
 				threads[i].interrupt();
 		}
 
@@ -204,18 +213,18 @@ public class LoadDriver {
 		List<Recording> allRecordings=new ArrayList<>();
 		long sum=0;
 		for (int i = 0; i < nThreads; i++) {
-			if(threads[i].getCount() == 0 )
+			if (loads[i].getCount() == 0)
 				continue;
 			threadCount++;
-			allRecordings.addAll(threads[i].getRecordings("timeouts"));
-			allRecordings.addAll(threads[i].getRecordings("thresholds"));
-			Recording avg=threads[i].getRecording("average");
+			allRecordings.addAll(loads[i].getRecordings("timeouts"));
+			allRecordings.addAll(loads[i].getRecordings("thresholds"));
+			Recording avg = loads[i].getRecording("average");
 			// aggregate the counts
-			count += threads[i].getCount();
+			count += loads[i].getCount();
 			// reconstitute the total execution time and aggregate
 			sum = sum + avg.count * avg.value;
 			// save the max of all threads
-			max = threads[i].getRecording("max").getValue() > max.getValue() ? threads[i].getRecording("max") : max;
+			max = loads[i].getRecording("max").getValue() > max.getValue() ? loads[i].getRecording("max") : max;
 		}
 
 		// sort recordings chronologically
@@ -236,7 +245,8 @@ public class LoadDriver {
 		System.out.println("========================================================");
 		//printClusterEndpoints(cluster);
 		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, reactive: %b, reactive batchSize: %d\n",
-				runSeconds, threads.length, timeoutUs, thresholdUs , nRequestsPerSecond, nRequestsPerSecond == 0 ? "(max)":"", gcIntervalMs, reactive, reactive ? batchSize : 1);
+				runSeconds, loads.length, timeoutUs, thresholdUs, nRequestsPerSecond,
+				nRequestsPerSecond == 0 ? "(max)" : "", gcIntervalMs, reactive, reactive ? batchSize : 1);
 		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d\n",
 				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, count/runSeconds/threadCount /* 1000000000/(sum/count/threadCount)*/);
 
@@ -272,8 +282,10 @@ public class LoadDriver {
 		System.err.println("	--gcintervalmilliseconds <n>");
 		System.err.println("	--kvconnections <n>");
 		System.err.println("	--messagesize <n>");
+		System.err.println("	--schedulerThreadCount <n>");
 		System.err.println("	--batchSize <n>");
 		System.err.println("	--reactive <true|false>");
+		System.err.println("	--virtualthreads <true|false>");
 		System.err.println("	--url <url>");
 		System.err.println("	--username <username>");
 		System.err.println("	--password <password>");
@@ -289,9 +301,70 @@ public class LoadDriver {
 	// Thread that runs the run() of another Thread
 	public static class ThreadWrapper extends Thread {
 		Thread thread;
-		public ThreadWrapper(Thread thread){
-			this.thread = thread;
+
+		public ThreadWrapper(LoadThread runnable, boolean virtualThreads) {
+			Method m = null;
+			try {
+				if (virtualThreads) {
+					m = Thread.class.getMethod("ofPlatform");
+				} else {
+					m = Thread.class.getMethod("ofVirtual");
+				}
+			} catch (NoSuchMethodException nsme) {}
+			if (m != null) {
+				Object platformOrVirtual = null;
+				try {
+					platformOrVirtual = m.invoke(null);
+				} catch (IllegalAccessException | InvocationTargetException e) {
+					throw new RuntimeException(e);
+				}
+
+				Method fm = null;
+				try {
+					fm = platformOrVirtual.getClass().getMethod("factory");
+				} catch (NoSuchMethodException e) {
+					throw new RuntimeException(e);
+				}
+				//ThreadFactory tf = Thread.ofVirtual().factory();
+				//this.thread = tf.newThread(runnable);
+				//System.err.println(this.thread+" =============== "+this.thread.getName());
+				//if(1==1)
+				//	return;
+				Object factory = null;
+				try {
+					factory = fm.invoke(platformOrVirtual);
+				} catch (IllegalAccessException | InvocationTargetException e) {
+					//throw new RuntimeException(e);
+					//e.printStackTrace();
+					System.err.println(e);
+					System.err.println("Attempting to use new Thread(runnable)");
+				}
+
+				if (factory != null) {
+					Method newThread = null;
+					try {
+						newThread = platformOrVirtual.getClass().getMethod("newThread", Runnable.class);
+					} catch (NoSuchMethodException e) {
+						throw new RuntimeException(e);
+					}
+
+					try {
+						this.thread = (Thread) newThread.invoke(factory, runnable);
+					} catch (IllegalAccessException | InvocationTargetException e) {
+						throw new RuntimeException(e);
+					}
+					return;
+				}
+			}
+
+
+			if (!virtualThreads) {
+				this.thread = new Thread(runnable);
+			} else {
+				throw new RuntimeException("virtualThreads not implemented");
+			}
 		}
 		public void run() {thread.run();}
+
 	}
 }
