@@ -249,8 +249,8 @@ public class LoadDriver {
 		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, reactive: %b, reactive batchSize: %d\n",
 				runSeconds, loads.length, timeoutUs, thresholdUs, nRequestsPerSecond,
 				nRequestsPerSecond == 0 ? "(max)" : "", gcIntervalMs, reactive, reactive ? batchSize : 1);
-		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d\n",
-				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, count/runSeconds/threadCount /* 1000000000/(sum/count/threadCount)*/);
+		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d threads: %d\n",
+				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, count/runSeconds/threadCount, nThreads);
 
 		System.err.println("sum: "+sum);
 		System.err.println("count: "+count);
@@ -305,72 +305,48 @@ public class LoadDriver {
 		Thread thread;
 
 		public ThreadWrapper(LoadThread runnable, boolean virtualThreads) {
-			if (!virtualThreads) { // short cut 
-				this.thread = new Thread(runnable);
-                                return;
-                        }
-			Method m = null;
-			try {
-				if (virtualThreads) {
-					m = Thread.class.getMethod("ofPlatform");
-				} else {
-					m = Thread.class.getMethod("ofVirtual");
-				}
-			} catch (NoSuchMethodException nsme) {}
-			if (m != null) {
-				Object platformOrVirtual = null;
-				try {
-					platformOrVirtual = m.invoke(null);
-				} catch (IllegalAccessException | InvocationTargetException e) {
-					throw new RuntimeException(e);
-				}
-
-				Method fm = null;
-				try {
-					fm = platformOrVirtual.getClass().getMethod("factory");
-				} catch (NoSuchMethodException e) {
-					throw new RuntimeException(e);
-				}
-				//ThreadFactory tf = Thread.ofVirtual().factory();
-				//this.thread = tf.newThread(runnable);
-				//System.err.println(this.thread+" =============== "+this.thread.getName());
-				//if(1==1)
-				//	return;
+			Object platformOrVirtual = callMethod(Thread.class, virtualThreads ? "ofVirtual" : "ofPlatform");
+			if (platformOrVirtual != null) {
 				Object factory = null;
 				try {
-					factory = fm.invoke(platformOrVirtual);
-				} catch (IllegalAccessException | InvocationTargetException e) {
-					//throw new RuntimeException(e);
-					//e.printStackTrace();
-					System.err.println(e);
-					System.err.println("Attempting to use new Thread(runnable)");
+					factory = callMethod(Class.forName("java.lang.Thread$Builder"), platformOrVirtual, "factory");
+					this.thread = (Thread) callMethod(Class.forName("java.util.concurrent.ThreadFactory"), factory,
+							"newThread", new Class<?>[] { Runnable.class }, runnable);
+				} catch (ClassNotFoundException e) {
+					throw new RuntimeException(e);
 				}
-
-				if (factory != null) {
-					Method newThread = null;
-					try {
-						newThread = platformOrVirtual.getClass().getMethod("newThread", Runnable.class);
-					} catch (NoSuchMethodException e) {
-						throw new RuntimeException(e);
-					}
-
-					try {
-						this.thread = (Thread) newThread.invoke(factory, runnable);
-					} catch (IllegalAccessException | InvocationTargetException e) {
-						throw new RuntimeException(e);
-					}
-					return;
-				}
-			}
-
-
-			if (!virtualThreads) {
+			} else if (!virtualThreads) {
 				this.thread = new Thread(runnable);
 			} else {
 				throw new RuntimeException("virtualThreads not implemented");
 			}
 		}
-		public void run() {thread.run();}
 
+		public void start() {
+			thread.start();
+		}
+
+		private static Object callMethod(Class<?> clazz, String methodName) {
+			return callMethod(clazz, null, methodName, null, null);
+		}
+
+		private static Object callMethod(Class<?> clazz, Object o, String methodName) {
+			return callMethod(clazz, o, methodName, null, null);
+		}
+
+		private static Object callMethod(Class<?> clazz, Object o, String methodName, Class<?>[] argTypes,
+				Object... args) {
+			Method m = null;
+			try {
+				m = (clazz != null ? clazz : o.getClass()).getMethod(methodName, argTypes);
+			} catch (NoSuchMethodException nsme) {
+				throw new RuntimeException(nsme);
+			}
+			try {
+				return m.invoke(o, args);
+			} catch (IllegalAccessException | InvocationTargetException e) {
+				throw new RuntimeException(e);
+			}
+		}
 	}
 }

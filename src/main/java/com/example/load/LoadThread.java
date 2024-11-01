@@ -152,6 +152,8 @@ public class LoadThread implements Runnable {
 	}
 
 	public void run() {
+
+
 		long timeOffset = 0;
 		try {
 			endTime = System.currentTimeMillis() + runSeconds * 1000;
