@@ -2,13 +2,10 @@ package com.example.load;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.concurrent.ThreadFactory;
 import java.util.logging.Logger;
 
 
 import com.couchbase.client.core.diagnostics.EndpointDiagnostics;
-import com.couchbase.client.core.env.IoConfig;
-import com.couchbase.client.core.env.IoEnvironment;
 import com.couchbase.client.core.service.ServiceType;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
@@ -25,7 +22,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 
 public class LoadDriver {
-	static Logger logger = Logger.getLogger("com.couchbase");
+	static Logger logger = Logger.getLogger("com.couchbase.core");
 	public static void main(String[] args) {
 		int argc = 0;
 		int nThreads = 4;
@@ -163,7 +160,6 @@ public class LoadDriver {
 
 		System.out.println("wait for idle Endpoints to timeout");
 		sleep(4000); // wait for idle Endpoints to timeout
-		System.out.println("======================================================== " + latch.getCount());
 		latch = new CountDownLatch(nThreads);
 		Semaphore rateSemaphore = nRequestsPerSecond == 0 ? null :  new Semaphore(0);
 		baseTime[0]=System.currentTimeMillis();
