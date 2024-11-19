@@ -28,20 +28,22 @@ public class LoadDriver {
 		int nThreads = 4;
 		int nRequestsPerSecond = 0;
 		int runSeconds = 10;
-		int timeoutUs = 40000;
-		int messageSize = 1024;
+		int timeoutUs = 2500000;
+		int messageSize = 2;
 		int schedulerThreadCount = 0;
-		boolean reactive = false;
-		int  batchSize=100;
+		Execution execution = Execution.reactive;
+		int batchSize = 128;
 		long thresholdUs = -1;
-		int nKvConnections = 1;
+		int nKvConnections = 2;
 		boolean logTimeout=true;
 		boolean logMax=false;
 		boolean logThreshold=true;
-		boolean asContent=false;
+		boolean asObject=true;
 		boolean countMaxInParallel = false;
 		boolean virtualThreads = false;
+		boolean shareCluster = true;
 		long gcIntervalMs=0;
+		int kvEventLoopThreadCount = 0;
 		String username = "Administrator";
 		String password = "password";
 		String cbUrl = "localhost";
@@ -56,6 +58,8 @@ public class LoadDriver {
 				nThreads = Integer.parseInt(args[++argc]);
 			else if ("--requestspersecond".equals(args[argc]))
 				nRequestsPerSecond = Integer.parseInt(args[++argc]);
+			else if ("--kveventloopthreadcount".equals(args[argc]))
+				kvEventLoopThreadCount = Integer.parseInt(args[++argc]);
 			else if ("--runseconds".equals(args[argc]))
 				runSeconds = Integer.parseInt(args[++argc]);
 			else if ("--timeoutmicroseconds".equals(args[argc]))
@@ -72,8 +76,8 @@ public class LoadDriver {
 				schedulerThreadCount  = Integer.parseInt(args[++argc]);
 			else if ("--batchsize".equals(args[argc]))
 				batchSize = Integer.parseInt(args[++argc]);
-			else if ("--reactive".equals(args[argc]))
-				reactive = Boolean.valueOf(args[++argc]);
+			else if ("--execution".equals(args[argc]))
+				execution = Execution.valueOf(args[++argc]);
 			else if ("--virtualthreads".equals(args[argc]))
 				virtualThreads = Boolean.valueOf(args[++argc]);
 			else if ("--url".equals(args[argc]))
@@ -94,8 +98,10 @@ public class LoadDriver {
 				countMaxInParallel = Boolean.valueOf(args[++argc]);
 			else if ("--logthreshold".equals(args[argc]))
 				logThreshold = Boolean.valueOf(args[++argc]);
-			else if ("--ascontent".equals(args[argc]))
-				asContent = Boolean.valueOf(args[++argc]);
+			else if ("--asobject".equals(args[argc]))
+				asObject = Boolean.valueOf(args[++argc]);
+			else if ("--sharecluster".equals(args[argc]))
+				shareCluster = Boolean.valueOf(args[++argc]);
 			else if ("--operationtype".equals(args[argc])) {
 				operationType = args[++argc];
 				if (!operationTypes.contains(operationType)) {
@@ -114,20 +120,27 @@ public class LoadDriver {
 			thresholdUs = timeoutUs / 5;
 
 		if(!keysList.isEmpty())
-			keys = (String[])keysList.toArray(new String[]{});
+			keys = keysList.toArray(new String[] {});
 
-		int nKvConns = nKvConnections;
-		ClusterEnvironment.Builder builder = ClusterEnvironment.builder()
-				.ioConfig(io -> io.numKvConnections(nKvConns));
-                if(schedulerThreadCount != 0)
-			builder.schedulerThreadCount(schedulerThreadCount);
-		ClusterEnvironment env = builder.build();
-		ClusterOptions options = ClusterOptions.clusterOptions(username, password);
+		Cluster cluster = null;
+		Collection collection = null;
+		if (shareCluster) {
+			int nKvConns = nKvConnections;
+			int kvTc = kvEventLoopThreadCount;
+			ClusterEnvironment.Builder builder = ClusterEnvironment.builder().ioEnvironment(ioe -> {
+				if (kvTc > 0)
+					ioe.eventLoopThreadCount(kvTc);
+			}).ioConfig(io -> io.numKvConnections(nKvConns));
+			if (schedulerThreadCount != 0)
+				builder.schedulerThreadCount(schedulerThreadCount);
+			ClusterEnvironment env = builder.build();
+			ClusterOptions options = ClusterOptions.clusterOptions(username, password).environment(env);
+			cluster = Cluster.connect(cbUrl, options.environment(env));
+			Bucket bucket = cluster.bucket(bucketname);
+			bucket.waitUntilReady(Duration.ofSeconds(10));
+			collection = bucket.defaultCollection();
+		}
 
-		Cluster cluster = Cluster.connect(cbUrl, options.environment(env));
-		Bucket bucket = cluster.bucket(bucketname);
-		Collection collection = bucket.defaultCollection();
-		bucket.waitUntilReady(Duration.ofSeconds(10));
 		//printClusterEndpoints(cluster);
 
 		logger.info("Connected");
@@ -146,8 +159,9 @@ public class LoadDriver {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			loads[i] = new LoadThread(collection, cbUrl, username, password, bucketname, keys, 2, nRequestsPerSecond,
 					timeoutUs,
-					thresholdUs, latch, null, baseTime, false, false, false, asContent, operationType.equals("get"),
-					operationType.equals("insert"), messageSize, reactive, batchSize, countMaxInParallel, cluster);
+					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
+					operationType.equals("insert"), messageSize, execution, batchSize, countMaxInParallel, cluster,
+					kvEventLoopThreadCount, nKvConnections, schedulerThreadCount);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
@@ -178,7 +192,9 @@ public class LoadDriver {
 			sleep(1);  //stagger the start
 			threads[i].start();
 		}
-		System.out.println(cluster.environment());
+		if (cluster != null) {
+			System.out.println(cluster.environment());
+		}
 		System.out.println("              ...running...");
 		if(rateSemaphore!=null) { // if rate-limited produce on counting semaphore at requested rate
 			long endTime = baseTime[0] + runSeconds * 1000;
@@ -242,16 +258,19 @@ public class LoadDriver {
 		System.out.println("MAX: "+max);
 		System.out.println("========================================================");
 		//printClusterEndpoints(cluster);
-		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, reactive: %b, reactive batchSize: %d\n",
+		System.out.printf("Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, execution: %s, batchSize: %d\n",
 				runSeconds, loads.length, timeoutUs, thresholdUs, nRequestsPerSecond,
-				nRequestsPerSecond == 0 ? "(max)" : "", gcIntervalMs, reactive, reactive ? batchSize : 1);
+				nRequestsPerSecond == 0 ? "(max)" : "", gcIntervalMs, execution, !execution.isSync() ? batchSize : 1);
 		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d threads: %d\n",
 				count , count / runSeconds , max.getValue()/1000.0, sum/1000/count, count/runSeconds/threadCount, nThreads);
 
 		System.err.println("sum: "+sum);
 		System.err.println("count: "+count);
 		System.err.println("threads: "+threadCount);
-
+		if (cluster != null) {
+			cluster.close();
+		}
+		System.exit(0); // had to add this after adding pScheduler in LoaqThread
 	}
 
 	private static void printClusterEndpoints(Cluster cluster) {
@@ -339,6 +358,7 @@ public class LoadDriver {
 				throw new RuntimeException(nsme);
 			}
 			try {
+				// System.err.println("calling "+methodName);
 				return m.invoke(o, args);
 			} catch (IllegalAccessException | InvocationTargetException e) {
 				throw new RuntimeException(e);
