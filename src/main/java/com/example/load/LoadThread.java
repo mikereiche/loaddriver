@@ -1,5 +1,8 @@
 package com.example.load;
 
+import com.couchbase.client.java.codec.RawStringTranscoder;
+import com.couchbase.client.java.codec.SerializableTranscoder;
+import com.couchbase.client.java.codec.Transcoder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -18,31 +21,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.couchbase.client.core.error.DocumentExistsException;
-import com.couchbase.client.core.error.DocumentNotFoundException;
 import com.couchbase.client.core.error.UnambiguousTimeoutException;
 import com.couchbase.client.core.msg.kv.MutationToken;
-import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
-import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.CommonOptions;
 import com.couchbase.client.java.codec.RawJsonTranscoder;
-import com.couchbase.client.java.env.ClusterEnvironment;
 import com.couchbase.client.java.json.JsonArray;
 import com.couchbase.client.java.json.JsonObject;
-import com.couchbase.client.java.kv.ExistsOptions;
-import com.couchbase.client.java.kv.ExistsResult;
 import com.couchbase.client.java.kv.GetOptions;
 import com.couchbase.client.java.kv.GetResult;
 import com.couchbase.client.java.kv.InsertOptions;
 import com.couchbase.client.java.kv.MutationResult;
-import com.couchbase.client.java.kv.RemoveOptions;
 import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryResult;
 
+
 public class LoadThread implements Runnable {
-	private static final JsonObject EMPTY_JSON_OBJECT =  JsonObject.create() ;
+	private static final JsonObject EMPTY_JSON_OBJECT = JsonObject.create();
 	long endTime;
 	long runSeconds;
 	int nRequestsPerSecond;
@@ -65,10 +61,11 @@ public class LoadThread implements Runnable {
 
 	int count = 0;
 	long sum = 0;
+	byte[] message;
 	Recording maxRecording;
 
 	Cluster cluster;
-
+	String bucketName;
 	Collection collection;
 
 	public HashMap<String, List<Recording>> recordings = new HashMap<>();
@@ -112,11 +109,11 @@ public class LoadThread implements Runnable {
 		return l.get(0); // l != null ? l.get(0) : new Recording();
 	}
 
-	public LoadThread(Collection collection, String cbUrl, String username, String password, String bucketname,
+	public LoadThread(Cluster cluster, String bucketName, Collection collection,
 			String[] keys, long runSeconds, int nRequestsPerSecond, long timeoutUs, long thresholdUs,
 			CountDownLatch latch, Semaphore rateSemaphore, long[] baseTime, boolean logTimeout, boolean logMax,
-			boolean logThreshold, boolean asObject, boolean kvGet, boolean kvInsert, int messageSize, Execution execution,
-			int batchSize, boolean countMaxInParallel, Cluster cluster, int kvEventLoopThreadCount, int numKvConnections, int schedulerThreadCount) {
+			boolean logThreshold, boolean asObject, boolean kvGet, boolean kvInsert, int messageSize,
+			Execution execution, int batchSize, boolean countMaxInParallel) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -136,25 +133,16 @@ public class LoadThread implements Runnable {
 		this.batchSize = batchSize;
 		this.countMaxInParallel = countMaxInParallel;
 		this.cluster = cluster;
-
+		this.bucketName = bucketName;
 		this.collection = collection;
-		if (this.collection == null) {
-			int kvTc = kvEventLoopThreadCount;
-			ClusterEnvironment.Builder builder = ClusterEnvironment.builder().ioEnvironment(ioe -> {
-				if (kvTc > 0)
-					ioe.eventLoopThreadCount(kvTc);
-			}).ioConfig(io -> io.numKvConnections(numKvConnections));
-			if (schedulerThreadCount != 0)
-				builder.schedulerThreadCount(schedulerThreadCount);
-			//builder.transcoder(Transcoder.Instance);
-			ClusterEnvironment env = builder.build();
-			ClusterOptions options = ClusterOptions.clusterOptions(username, password).environment(env);
-			cluster = Cluster.connect(cbUrl, options);
-			Bucket bucket = cluster.bucket(bucketname);
-			bucket.waitUntilReady(Duration.ofSeconds(10));
-			this.collection = bucket.defaultCollection();
-			System.out.println(cluster.environment());
+
+		JsonObject messageJson = JsonObject.jo();
+		for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
+			String name = String.format("%1$" + 4 + "d", i).replace(" ", "0");
+			String value = String.format("%1$1000s", "x");
+			messageJson.put(name, value);
 		}
+		message = messageJson.toBytes();
 
 	}
 
@@ -167,74 +155,29 @@ public class LoadThread implements Runnable {
 
 	public void run() {
 
+		cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
 		Scheduler pScheduler = null;
 		long timeOffset = 0;
 		try {
-			endTime = System.currentTimeMillis() + runSeconds * 1000;
-			CommonOptions options = kvGet
-				? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-				//.transcoder(RawJsonTranscoder.INSTANCE)
-				: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000));
-				//.transcoder(RawJsonTranscoder.INSTANCE);
+
+			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
+					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000));
+
 			maxRecording = new Recording();
-			recordings.put("timeouts", new LinkedList<Recording>()); // linked list is cheaper to extend than ArrayList
-			recordings.put("thresholds", new LinkedList<Recording>()); // linked list is cheaper to extend than
+			recordings.put("timeouts", new LinkedList<>()); // linked list is cheaper to extend than ArrayList
+			recordings.put("thresholds", new LinkedList<>()); // linked list is cheaper to extend than
 			// ArrayList
 			final String uuidStr = UUID.randomUUID().toString();
 			final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
 			count = 0;
 			sum = 0;
-			JsonObject messageJson = JsonObject.jo();
-			byte[] message;
-			for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
-				String key = String.format("%1$" + 4 + "d", i).replace(" ", "0");
-				String value = String.format("%1$" + 100 + "s", "x").replace(" ", "x");
-				messageJson.put(key, value);
-			}
-			message = messageJson.toBytes();
-			if (kvInsert || (kvGet && (keys == null || keys.length == 1))) {
-				if (kvGet) {
-					if (first.getAndSet(false) && keys != null && keys.length == 1) {
-						ExistsResult exr = collection.exists(keys[0],
-							ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
-						if (exr.exists()) {
-							try {
-								collection.remove(keys[0],
-									RemoveOptions.removeOptions().timeout(Duration.ofNanos(timeoutUs * 1000)));
-							} catch (DocumentNotFoundException dnfe) {
-								// ignore - there are a bunch of threads doing this
-							}
-						}
-						try {
-							collection.insert(keys[0], message,
-								InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
-									.transcoder(RawJsonTranscoder.INSTANCE));
-							System.err.println("Inserted: message length is: " + message.length);
-						} catch (DocumentExistsException dee) {
-							// ignore - there are a bunch of threads doing this
-						}
-					} else {
-						do {
-							try {
-								Thread.sleep(50);
-							} catch (InterruptedException ie) {
-							}
-						} while (!collection
-							.exists(keys[0],
-								ExistsOptions.existsOptions().timeout(Duration.ofNanos(timeoutUs * 1000)))
-							.exists());
-
-					}
-				} else if (first.getAndSet(false)) {
-					System.err.println("message length is: " + message.length);
-				}
-			}
 
 			if (execution.isReactive()) {
 				// pScheduler = Schedulers.newParallel(Thread.currentThread().getName(), batchSize, false);
 			}
 
 			AtomicInteger reactiveCount = new AtomicInteger();
+			endTime = System.currentTimeMillis() + runSeconds * 1000;
 			while (System.currentTimeMillis() < endTime) {
 
 				if (rateSemaphore != null) {
@@ -252,54 +195,58 @@ public class LoadThread implements Runnable {
 					if (kvGet) {
 						if (execution.isReactive()) {
 
-							List<JsonObject> mrList = Flux.range(1, batchSize).flatMap(i -> {
+							List<Object> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
-									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
 								Mono<GetResult> mrMono = collection.reactive().get(keys[count % keys.length],
-									(GetOptions) options);
+										(GetOptions) options);
 								return mrMono;
-							}).map(mr -> {
+							}).map(result -> {
 								if (countMaxInParallel)
 									requestsInParallel.decrementAndGet();
-								return asObject ? mr.contentAsObject() : EMPTY_JSON_OBJECT;
-							})/*.publishOn(pScheduler)*/.collectList().block();
+								Object obj = decode(result);
+								return obj;
+							}).collectList().block();
 
-						} else if (execution.isAsync()){
+						} else if (execution.isAsync()) {
 
 							List<CompletableFuture<GetResult>> futures = new LinkedList<>();
-							for(int i=0; i< batchSize; i++) {
+							for (int i = 0; i < batchSize; i++) {
+								if (countMaxInParallel
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									maxRequestsInParallel.set(requestsInParallel.get());
+								}
 								count++;
 								CompletableFuture<GetResult> f = collection.async().get(keys[count % keys.length],
-									(GetOptions) options);
+										(GetOptions) options);
 								futures.add(f);
 							}
-							//CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-							for(int i=0; i< batchSize; i++){
-								GetResult r = futures.get(i).join();
-								//System.out.println(r.toString());
-							}
-							if(asObject){
-								List<CompletableFuture<JsonObject>> jfutures = new LinkedList<>();
-								for(int i=0; i< batchSize; i++) {
-									int ii=i;
-										CompletableFuture<JsonObject> jf = CompletableFuture.supplyAsync( () -> {
-												try {
-													return  futures.get(ii).get().contentAsObject();
-												} catch (InterruptedException | ExecutionException e) {
-													e.printStackTrace();
-													return null;
-												}
-											});
-									jfutures.add(jf);
-								}
+							// CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+							List<CompletableFuture<Object>> jfutures = new LinkedList<>();
+							for (int i = 0; i < batchSize; i++) {
+								int ii = i;
+								CompletableFuture<Object> jf = CompletableFuture.supplyAsync(() -> {
+									try {
+										GetResult result = futures.get(ii).get();
+										Object obj = decode(result);
+										if (countMaxInParallel)
+											requestsInParallel.decrementAndGet();
+										return obj;
+									} catch (InterruptedException | ExecutionException e) {
+										e.printStackTrace();
+										return null;
+									}
+								});
+								jfutures.add(jf);
 								CompletableFuture.allOf(jfutures.toArray(new CompletableFuture[0])).join();
 							}
 						} else {
 							if (countMaxInParallel
-								&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 								maxRequestsInParallel.set(requestsInParallel.get());
 							}
 							count++;
@@ -309,16 +256,16 @@ public class LoadThread implements Runnable {
 							if (asObject)
 								r.contentAsObject();
 						}
-        } else if (kvInsert) {
+					} else if (kvInsert) {
 						if (execution.isReactive()) {
 							reactiveCount.set(count);
 							List<Optional<MutationToken>> mrList = Flux.range(1, batchSize).flatMap(i -> {
 								if (countMaxInParallel
-									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								Mono<MutationResult> mrMono = collection.reactive().insert(
-									key(uuid, reactiveCount.getAndIncrement()), message, (InsertOptions) options);
+										key(uuid, reactiveCount.getAndIncrement()), message, (InsertOptions) options);
 								return mrMono;
 							}).map(mr -> {
 								if (countMaxInParallel)
@@ -328,7 +275,7 @@ public class LoadThread implements Runnable {
 							count = count + batchSize;
 						} else {
 							if (countMaxInParallel
-								&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 								maxRequestsInParallel.set(requestsInParallel.get());
 							}
 							MutationResult mr = collection.insert(key(uuid, count++), message, (InsertOptions) options);
@@ -339,8 +286,8 @@ public class LoadThread implements Runnable {
 					} else {
 						count++;
 						QueryResult qr = cluster.query("SELECT * from `travel-sample` where id = ?",
-							QueryOptions.queryOptions()
-								.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
+								QueryOptions.queryOptions()
+										.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {
@@ -362,15 +309,15 @@ public class LoadThread implements Runnable {
 					if (logTimeout)
 						System.out.println(timeout);
 				} else if (rTime > thresholdUs * 1000) { // if already recorded timeout, don't also record threshold
-					Recording threshold = new Recording(getThreadName(), rTime > timeoutUs * 1000 ? "TH" : "th", count, rTime,
-						timeOffset);
+					Recording threshold = new Recording(getThreadName(), rTime > timeoutUs * 1000 ? "TH" : "th", count,
+							rTime, timeOffset);
 					recordings.get("thresholds").add(threshold);
 					if (logThreshold)
 						System.out.println(threshold);
 				}
 			}
-		} catch(RuntimeException t){
-			if( t.getCause()!= null && !(t.getCause() instanceof InterruptedException) || rateSemaphore == null)
+		} catch (RuntimeException t) {
+			if (t.getCause() != null && !(t.getCause() instanceof InterruptedException) || rateSemaphore == null)
 				throw t;
 		} finally {
 			if (pScheduler != null) {
@@ -381,7 +328,7 @@ public class LoadThread implements Runnable {
 				recordings.get("average").add(new Recording(getThreadName(), "avg", count, sum / count, 999999999));
 			}
 			latch.countDown();
-			if(collection == null){
+			if (collection == null) {
 				cluster.close();
 			}
 		}
@@ -390,4 +337,21 @@ public class LoadThread implements Runnable {
 	String key(String uuid, long count) {
 		return uuid + String.format("%1$8d", count).replace(" ", "0");
 	}
+
+	Object decode(GetResult result){
+		if(!asObject){
+			return EMPTY_JSON_OBJECT;
+		}
+		if(cluster.environment().transcoder() == RawStringTranscoder.INSTANCE )
+			return result.contentAs(String.class);
+
+		if(cluster.environment().transcoder() == RawJsonTranscoder.INSTANCE )
+			return result.contentAs(byte[].class);
+
+		if(cluster.environment().transcoder() == SerializableTranscoder.INSTANCE )
+			return result.contentAsObject(); // it was saved as a String
+
+		return result.contentAsObject();
+	}
+
 }
