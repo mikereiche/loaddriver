@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -14,10 +15,7 @@ import java.util.logging.Logger;
 
 import com.couchbase.client.core.diagnostics.EndpointDiagnostics;
 import com.couchbase.client.core.env.ThresholdLoggingTracerConfig;
-import com.couchbase.client.core.error.DocumentExistsException;
-import com.couchbase.client.core.error.DocumentNotFoundException;
 import com.couchbase.client.core.service.ServiceType;
-import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
@@ -139,27 +137,49 @@ public class LoadDriver {
 			keys = keysList.toArray(new String[] {});
 
 		Cluster cluster = getCluster(cbUrl, username, password, bucketname, nKvConnections, kvEventLoopThreadCount,
-				schedulerThreadCount, thresholdUs, transcoder);
+				schedulerThreadCount, thresholdUs, transcoder, shareCluster ? nThreads : 0);
+		System.err.println(cluster.environment());
 		Collection collection = cluster.bucket(bucketname).defaultCollection();
 
-		logger.info("Connected");
-		JsonObject messageJson = JsonObject.jo();
-		byte[] message;
-		for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
-			String name = String.format("%1$" + 4 + "d", i).replace(" ", "0");
-			String value = String.format("%1$1000s", "x");
-			messageJson.put(name, value);
+		Object document;
+		if (transcoder.isJsonTranscoder() || transcoder.isSerializableTranscoder()
+				|| transcoder.isRawJsonTranscoder()) {
+			JsonObject messageJson = JsonObject.jo();
+			byte[] someBytes = new byte[1000];
+			Random random = new Random();
+			for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
+				String name = String.format("%1$4d", i).replace(" ", "0");
+				random.nextBytes(someBytes);
+				String value = new String(asciify(someBytes));
+				messageJson.put(name, value);
+			}
+
+			if (transcoder.isRawJsonTranscoder()) {
+				document = messageJson.toBytes();
+			} else {
+				document = messageJson;
+			}
+		} else if (transcoder.isRawStringTranscoder() || transcoder.isRawBinaryTranscoder()) {
+			byte[] someBytes = new byte[messageSize];
+			new Random().nextBytes(someBytes);
+			if (transcoder.isRawStringTranscoder()) {
+				document = new String(asciify(someBytes));
+			} else {
+				document = someBytes;
+			}
+		} else {
+			throw new RuntimeException("unknown transcoder " + transcoder);
 		}
-		message = messageJson.toBytes();
-		System.err.println("Inserted: message length is: " + message.length);
+
+		System.err.println("encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document) : document.toString().length())+ " "+ document);
+
 		if (keys == null) {
 			keys = new String[batchSize];
 			for (int i = 0; i < batchSize; i++) {
-				keys[i] = "000" + i;
+				keys[i] = String.format("%05d",i);
 			}
 		}
 		if (operationType.equals("get")) {
-			Cluster cl = cluster;
 			Duration to = Duration.ofMillis(timeoutUs / 1000L);
 			AtomicInteger inflight = new AtomicInteger();
 			Flux.fromIterable(List.of(keys)).parallel().runOn(Schedulers.boundedElastic()).flatMap(k -> {
@@ -167,10 +187,7 @@ public class LoadDriver {
 				if (exr.exists()) {
 					collection.remove(k, RemoveOptions.removeOptions().timeout(to));
 				}
-				com.couchbase.client.java.codec.Transcoder tc = cl.environment().transcoder();
-				collection.insert(k,
-						tc == RawJsonTranscoder.INSTANCE || tc == RawStringTranscoder.INSTANCE ? message : messageJson,
-						InsertOptions.insertOptions().timeout(to));
+				collection.insert(k, document, InsertOptions.insertOptions().timeout(to));
 				inflight.decrementAndGet();
 				return Flux.empty();
 			}).sequential().blockLast();
@@ -180,8 +197,6 @@ public class LoadDriver {
 			cluster.close();
 			cluster = null;
 		}
-
-		// printClusterEndpoints(cluster);
 
 		// warm things up by running full-bore (no rateSemaphore) for two seconds. No logging.
 		// execute the run() methods in ThreadWrapper() threads
@@ -197,22 +212,20 @@ public class LoadDriver {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			Cluster theCluster = shareCluster ? cluster
 					: getCluster(cbUrl, username, password, bucketname, nKvConnections, kvEventLoopThreadCount,
-							schedulerThreadCount, thresholdUs, transcoder);
+							schedulerThreadCount, thresholdUs, transcoder, 0);
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
-			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs, thresholdUs,
-					latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
+			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
+					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
 					operationType.equals("insert"), messageSize, execution, batchSize, countMaxInParallel);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
 		try {
-			System.out.println("waiting for warm-up");
 			latch.await();
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
 
-		System.out.println("wait for idle Endpoints to timeout");
 		sleep(4000); // wait for idle Endpoints to timeout
 		latch = new CountDownLatch(nThreads);
 		Semaphore rateSemaphore = nRequestsPerSecond == 0 ? null : new Semaphore(0);
@@ -232,10 +245,7 @@ public class LoadDriver {
 			sleep(1); // stagger the start
 			threads[i].start();
 		}
-		if (cluster != null) {
-			System.out.println(cluster.environment());
-		}
-		System.out.println("              ...running...");
+
 		if (rateSemaphore != null) { // if rate-limited produce on counting semaphore at requested rate
 			long endTime = baseTime[0] + runSeconds * 1000;
 			long nRequests = 0;
@@ -258,19 +268,24 @@ public class LoadDriver {
 			e.printStackTrace();
 		}
 
-		System.out.println("===================  RESULTS  ========================");
 		if (countMaxInParallel)
 			System.out.println("maxInRequestsInParallel: " + LoadThread.maxRequestsInParallel);
 
 		long count = 0;
-		long threadCount = 0;
+
 		Recording max = new Recording();
 		List<Recording> allRecordings = new ArrayList<>();
 		long sum = 0;
+		if (cluster != null) {
+			cluster.close();
+		}
 		for (int i = 0; i < nThreads; i++) {
+			if (shareCluster) {
+				loads[i].cluster().close();
+			}
 			if (loads[i].getCount() == 0)
 				continue;
-			threadCount++;
+
 			allRecordings.addAll(loads[i].getRecordings("timeouts"));
 			allRecordings.addAll(loads[i].getRecordings("thresholds"));
 			Recording avg = loads[i].getRecording("average");
@@ -294,40 +309,61 @@ public class LoadDriver {
 		for (Recording recording : allRecordings) {
 			System.out.println(recording);
 		}
-		/*
-		Recording rr=allRecordings.stream().filter(r -> r.name.equals("avg")).reduce(new Recording(), (a,b) ->
-				new Recording("","sum",a.count+b.count,a.value+b.value*b.count,0) );
-		 */
-		System.out.println("MAX: " + max);
-		System.out.println("========================================================");
-		// printClusterEndpoints(cluster);
-		System.out.printf(
-				"Run: seconds: %d, threads: %d, timeout: %dus, threshold: %dus requests/second: %d %s, forced GC interval: %dms, execution: %s, batchSize: %d\n",
-				runSeconds, loads.length, timeoutUs, thresholdUs, nRequestsPerSecond,
-				nRequestsPerSecond == 0 ? "(max)" : "", gcIntervalMs, execution, !execution.isSync() ? batchSize : 1);
-		System.out.printf("count: %d, requests/second: %d, max: %.0fus avg: %dus, rq/s per-thread: %d threads: %d\n",
-				count, count / runSeconds, max.getValue() / 1000.0, sum / 1000 / count,
-				count / runSeconds / threadCount, nThreads);
 
-		System.err.println("sum: " + sum);
-		System.err.println("count: " + count);
-		System.err.println("threads: " + threadCount);
-		if (cluster != null) {
-			cluster.close();
+		StringBuffer p = new StringBuffer();
+		p.append(" nthreads: " + nThreads);
+		p.append(", nRequestsPerSecond: " + nRequestsPerSecond);
+		p.append(", kvEventLoopThreadCount: " + kvEventLoopThreadCount);
+		p.append(", runSeconds: " + runSeconds);
+		p.append(", timeoutUs: " + timeoutUs);
+		p.append(", thresholdUs: " + thresholdUs);
+		p.append(", gcIntervalMs: " + gcIntervalMs);
+		p.append(", nKvConnections: " + nKvConnections);
+		p.append(", messageSize: " + messageSize);
+		p.append(", schedulerThreadCount: " + schedulerThreadCount);
+		p.append(", batchSize: " + batchSize);
+		p.append(", execution: " + execution);
+		p.append(", transcoder: " + transcoder);
+		p.append(", virtualThreads: " + virtualThreads);
+		p.append(", cbUrl: " + cbUrl);
+		p.append(", bucketname: " + bucketname);
+		// p.append(", keysList: " + keysList);
+		p.append(", asObject: " + asObject);
+		p.append(", shareCluster: " + shareCluster);
+		p.append(", operationType: " + operationType);
+
+		StringBuffer r = new StringBuffer();
+		r.append("count: " + count);
+		r.append(", requests/second: " + count / runSeconds);
+		r.append(", max: " + max.getValue() / 1000.0);
+		r.append(", avg: " + sum / 1000 / count);
+		r.append(", rq/s/thread: " + count / runSeconds / nThreads);
+
+		System.out.println(r + ", " + p);
+		System.exit(0); // had to add this after adding pScheduler in LoadThread
+	}
+
+	private static byte[] asciify(byte[] someBytes) {
+		for(int i=0; i< someBytes.length; i++) {
+			someBytes[i] = (byte) (Math.abs(someBytes[i]) % ('z' - ' ') + ' ');
 		}
-		System.exit(0); // had to add this after adding pScheduler in LoaqThread
+		return someBytes;
 	}
 
 	static Cluster getCluster(String cbUrl, String username, String password, String bucketname, int nKvConnections,
-			int kvEventLoopThreadCount, int schedulerThreadCount, long thresholdUs, Transcoder transcoder) {
+			int kvEventLoopThreadCount, int schedulerThreadCount, long thresholdUs, Transcoder transcoder,
+			int maxHttpConnections) {
 
-		ThresholdLoggingTracerConfig.Builder config = ThresholdLoggingTracerConfig.builder()
-				.kvThreshold(Duration.ofMillis(thresholdUs / 1000));
+		ClusterEnvironment.Builder builder = ClusterEnvironment.builder();
 
-		ClusterEnvironment.Builder builder = ClusterEnvironment.builder().ioEnvironment(ioe -> {
-			if (kvEventLoopThreadCount > 0)
-				ioe.eventLoopThreadCount(kvEventLoopThreadCount);
-		}).ioConfig(io -> io.numKvConnections(nKvConnections));
+		// builder.ioConfig( ioc -> ioc.captureTraffic(ServiceType.KV));
+
+		builder.ioConfig(io -> io.numKvConnections(nKvConnections));
+
+		if (kvEventLoopThreadCount > 0) {
+			builder.ioEnvironment(ioe -> ioe.eventLoopThreadCount(kvEventLoopThreadCount));
+		}
+
 		if (schedulerThreadCount != 0) {
 			builder.schedulerThreadCount(schedulerThreadCount);
 		}
@@ -337,11 +373,17 @@ public class LoadDriver {
 		if (!transcoder.isJsonTranscoder()) {
 			builder.transcoder(transcoder.getInstance());
 		}
+		if (maxHttpConnections != 0) {
+			builder.ioConfig(ioc -> ioc.maxHttpConnections(maxHttpConnections));
+		}
+
+		ThresholdLoggingTracerConfig.Builder config = ThresholdLoggingTracerConfig.builder()
+				.kvThreshold(Duration.ofMillis(thresholdUs / 1000));
 		builder.thresholdLoggingTracerConfig(config).build();
+
 		ClusterEnvironment env = builder.build();
 		ClusterOptions options = ClusterOptions.clusterOptions(username, password).environment(env);
 		Cluster cluster = Cluster.connect(cbUrl, options.environment(env));
-		Bucket bucket = cluster.bucket(bucketname);
 		return cluster;
 	}
 
@@ -458,6 +500,22 @@ public class LoadDriver {
 
 		Transcoder(com.couchbase.client.java.codec.Transcoder tc) {
 			instance = tc;
+		}
+
+		public boolean isRawStringTranscoder() {
+			return this == rawstring;
+		}
+
+		public boolean isRawJsonTranscoder() {
+			return this == rawjson;
+		}
+
+		public boolean isSerializableTranscoder() {
+			return this == serializable;
+		}
+
+		public boolean isRawBinaryTranscoder() {
+			return this == rawbinary;
 		}
 	};
 }

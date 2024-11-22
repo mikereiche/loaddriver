@@ -1,5 +1,6 @@
 package com.example.load;
 
+import com.couchbase.client.java.codec.RawBinaryTranscoder;
 import com.couchbase.client.java.codec.RawStringTranscoder;
 import com.couchbase.client.java.codec.SerializableTranscoder;
 import com.couchbase.client.java.codec.Transcoder;
@@ -224,7 +225,6 @@ public class LoadThread implements Runnable {
 										(GetOptions) options);
 								futures.add(f);
 							}
-							// CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
 							List<CompletableFuture<Object>> jfutures = new LinkedList<>();
 							for (int i = 0; i < batchSize; i++) {
@@ -342,10 +342,11 @@ public class LoadThread implements Runnable {
 		if(!asObject){
 			return EMPTY_JSON_OBJECT;
 		}
-		if(cluster.environment().transcoder() == RawStringTranscoder.INSTANCE )
+		Transcoder tc = cluster.environment().transcoder();
+		if(tc == RawStringTranscoder.INSTANCE )
 			return result.contentAs(String.class);
 
-		if(cluster.environment().transcoder() == RawJsonTranscoder.INSTANCE )
+		if(tc == RawJsonTranscoder.INSTANCE  || tc == RawBinaryTranscoder.INSTANCE)
 			return result.contentAs(byte[].class);
 
 		if(cluster.environment().transcoder() == SerializableTranscoder.INSTANCE )
@@ -354,4 +355,7 @@ public class LoadThread implements Runnable {
 		return result.contentAsObject();
 	}
 
+	Cluster cluster(){
+		return cluster;
+	}
 }
