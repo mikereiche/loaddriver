@@ -57,6 +57,7 @@ public class LoadDriver {
 		boolean shareCluster = true;
 		long gcIntervalMs = 0;
 		int kvEventLoopThreadCount = 0;
+		boolean sameId=false;
 		String username = "Administrator";
 		String password = "password";
 		String cbUrl = "localhost";
@@ -117,6 +118,8 @@ public class LoadDriver {
 				asObject = Boolean.valueOf(args[++argc]);
 			else if ("--sharecluster".equals(args[argc]))
 				shareCluster = Boolean.valueOf(args[++argc]);
+			else if ("--sameid".equals(args[argc]))
+				sameId = Boolean.valueOf(args[++argc]);
 			else if ("--operationtype".equals(args[argc])) {
 				operationType = args[++argc];
 				if (!operationTypes.contains(operationType)) {
@@ -171,7 +174,7 @@ public class LoadDriver {
 			throw new RuntimeException("unknown transcoder " + transcoder);
 		}
 
-		System.err.println("encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document) : document.toString().length())+ " "+ document);
+		System.err.println("encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document) : document.toString().length())/*+ " "+ document*/);
 
 		if (keys == null) {
 			keys = new String[batchSize];
@@ -216,7 +219,7 @@ public class LoadDriver {
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
 			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
-					operationType.equals("insert"), messageSize, execution, batchSize, countMaxInParallel);
+					operationType.equals("insert"), messageSize, execution, batchSize, countMaxInParallel, sameId);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
@@ -234,6 +237,7 @@ public class LoadDriver {
 		if (gcIntervalMs != 0)
 			new GCThread(gcIntervalMs, runSeconds, baseTime[0]).start();
 
+		System.out.println("Running: ");
 		for (int i = 0; i < nThreads; i++) {
 			loads[i].setRunSeconds(runSeconds);
 			loads[i].setLatch(latch);
@@ -350,12 +354,13 @@ public class LoadDriver {
 		return someBytes;
 	}
 
-	static Cluster getCluster(String cbUrl, String username, String password, String bucketname, int nKvConnections,
+	static Cluster getCluster(String cbUrl, String username, String password, String bucketName, int nKvConnections,
 			int kvEventLoopThreadCount, int schedulerThreadCount, long thresholdUs, Transcoder transcoder,
 			int maxHttpConnections) {
 
 		ClusterEnvironment.Builder builder = ClusterEnvironment.builder();
 
+		//builder.transactionsConfig( tc -> tc.cleanupConfig( cc -> cc.cleanupLostAttempts(false).cleanupClientAttempts(false) ));
 		// builder.ioConfig( ioc -> ioc.captureTraffic(ServiceType.KV));
 
 		builder.ioConfig(io -> io.numKvConnections(nKvConnections));
@@ -384,6 +389,7 @@ public class LoadDriver {
 		ClusterEnvironment env = builder.build();
 		ClusterOptions options = ClusterOptions.clusterOptions(username, password).environment(env);
 		Cluster cluster = Cluster.connect(cbUrl, options.environment(env));
+		cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
 		return cluster;
 	}
 

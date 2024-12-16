@@ -68,6 +68,7 @@ public class LoadThread implements Runnable {
 	Cluster cluster;
 	String bucketName;
 	Collection collection;
+	boolean sameId;
 
 	public HashMap<String, List<Recording>> recordings = new HashMap<>();
 
@@ -114,7 +115,7 @@ public class LoadThread implements Runnable {
 			String[] keys, long runSeconds, int nRequestsPerSecond, long timeoutUs, long thresholdUs,
 			CountDownLatch latch, Semaphore rateSemaphore, long[] baseTime, boolean logTimeout, boolean logMax,
 			boolean logThreshold, boolean asObject, boolean kvGet, boolean kvInsert, int messageSize,
-			Execution execution, int batchSize, boolean countMaxInParallel) {
+			Execution execution, int batchSize, boolean countMaxInParallel, boolean sameId) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -136,6 +137,7 @@ public class LoadThread implements Runnable {
 		this.cluster = cluster;
 		this.bucketName = bucketName;
 		this.collection = collection;
+		this.sameId = sameId;
 
 		JsonObject messageJson = JsonObject.jo();
 		for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
@@ -156,7 +158,7 @@ public class LoadThread implements Runnable {
 
 	public void run() {
 
-		cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
+		//cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
 		Scheduler pScheduler = null;
 		long timeOffset = 0;
 		try {
@@ -202,7 +204,7 @@ public class LoadThread implements Runnable {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
-								Mono<GetResult> mrMono = collection.reactive().get(keys[count % keys.length],
+								Mono<GetResult> mrMono = collection.reactive().get(keys[sameId ? 0 : count % keys.length],
 										(GetOptions) options);
 								return mrMono;
 							}).map(result -> {
@@ -221,7 +223,7 @@ public class LoadThread implements Runnable {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
-								CompletableFuture<GetResult> f = collection.async().get(keys[count % keys.length],
+								CompletableFuture<GetResult> f = collection.async().get(keys[sameId ? 0 : count % keys.length],
 										(GetOptions) options);
 								futures.add(f);
 							}
@@ -287,7 +289,7 @@ public class LoadThread implements Runnable {
 						count++;
 						QueryResult qr = cluster.query("SELECT * from `travel-sample` where id = ?",
 								QueryOptions.queryOptions()
-										.parameters(JsonArray.create().add(keys[count % keys.length].split("_")[1])));
+										.parameters(JsonArray.create().add(keys[sameId ? 0 : count % keys.length].split("_")[1])));
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {
