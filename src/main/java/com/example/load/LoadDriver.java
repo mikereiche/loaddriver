@@ -221,7 +221,7 @@ public class LoadDriver {
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
 			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
-					operationType.equals("insert"), messageSize, execution, batchSize, countMaxInParallel, sameId);
+					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 

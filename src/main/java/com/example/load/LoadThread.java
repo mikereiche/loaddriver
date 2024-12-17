@@ -53,14 +53,13 @@ public class LoadThread implements Runnable {
 	boolean asObject;
 	boolean kvGet;
 	boolean kvInsert;
-	int messageSize;
 	Execution execution;
 	int batchSize;
 	boolean countMaxInParallel;
 
 	int count = 0;
 	long sum = 0;
-	byte[] message;
+	Object message;
 	Recording maxRecording;
 
 	Cluster cluster;
@@ -112,7 +111,7 @@ public class LoadThread implements Runnable {
 	public LoadThread(Cluster cluster, String bucketName, Collection collection, String[] keys, long runSeconds,
 			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
 			long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asObject, boolean kvGet,
-			boolean kvInsert, int messageSize, Execution execution, int batchSize, boolean countMaxInParallel,
+			boolean kvInsert, Object message, Execution execution, int batchSize, boolean countMaxInParallel,
 			boolean sameId) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
@@ -128,7 +127,7 @@ public class LoadThread implements Runnable {
 		this.asObject = asObject;
 		this.kvGet = kvGet;
 		this.kvInsert = kvInsert;
-		this.messageSize = messageSize;
+		this.message = message;
 		this.execution = execution;
 		this.batchSize = batchSize;
 		this.countMaxInParallel = countMaxInParallel;
@@ -136,14 +135,6 @@ public class LoadThread implements Runnable {
 		this.bucketName = bucketName;
 		this.collection = collection;
 		this.sameId = sameId;
-
-		JsonObject messageJson = JsonObject.jo();
-		for (int i = 0; messageJson.toBytes().length < messageSize - 10; i++) {
-			String name = String.format("%1$" + 4 + "d", i).replace(" ", "0");
-			String value = String.format("%1$1000s", "x");
-			messageJson.put(name, value);
-		}
-		message = messageJson.toBytes();
 
 	}
 
