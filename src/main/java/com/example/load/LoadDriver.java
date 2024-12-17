@@ -333,13 +333,14 @@ public class LoadDriver {
 		p.append(", bucketname: " + bucketname);
 		// p.append(", keysList: " + keysList);
 		p.append(", asObject: " + asObject);
+		p.append(", sameId: " + sameId);
 		p.append(", shareCluster: " + shareCluster);
 		p.append(", operationType: " + operationType);
 
 		StringBuffer r = new StringBuffer();
 		r.append("count: " + count);
 		r.append(", requests/second: " + count / runSeconds);
-		r.append(", max: " + max.getValue() / 1000.0);
+		r.append(", max: " + max.getValue() / 1000);
 		r.append(", avg: " + sum / 1000 / count);
 		r.append(", rq/s/thread: " + count / runSeconds / nThreads);
 
@@ -433,6 +434,7 @@ public class LoadDriver {
 		System.err.println("	--countmaxinparallel <true|false>");
 		System.err.println("	--logthreshold <true|false>");
 		System.err.println("	--asobject <true|false>");
+		System.err.println("	--sameid <true|false>");
 		System.err.println("	--transcoder rawjson|rawbinary|rawstring|serializable");
 		System.err.println("	--key <key> [ --key <key> ...]");
 		System.err.println(
