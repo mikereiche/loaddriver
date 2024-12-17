@@ -216,36 +216,25 @@ public class LoadThread implements Runnable {
 
 						} else if (execution.isAsync()) {
 
-							List<CompletableFuture<GetResult>> futures = new LinkedList<>();
+							List<CompletableFuture<Object>> futures = new LinkedList<>();
 							for (int i = 0; i < batchSize; i++) {
 								if (countMaxInParallel
 										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
-								CompletableFuture<GetResult> f = collection.async().get(keys[sameId ? 0 : count % keys.length],
-										(GetOptions) options);
+								CompletableFuture<Object> f =
+									collection.async().get(keys[sameId ? 0 : count % keys.length],
+										(GetOptions) options).thenApply( result -> {
+									Object obj = decode(result);
+									if (countMaxInParallel)
+										requestsInParallel.decrementAndGet();
+									return obj;
+								});
 								futures.add(f);
 							}
+							CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-							List<CompletableFuture<Object>> jfutures = new LinkedList<>();
-							for (int i = 0; i < batchSize; i++) {
-								int ii = i;
-								CompletableFuture<Object> jf = CompletableFuture.supplyAsync(() -> {
-									try {
-										GetResult result = futures.get(ii).get();
-										Object obj = decode(result);
-										if (countMaxInParallel)
-											requestsInParallel.decrementAndGet();
-										return obj;
-									} catch (InterruptedException | ExecutionException e) {
-										e.printStackTrace();
-										return null;
-									}
-								});
-								jfutures.add(jf);
-								CompletableFuture.allOf(jfutures.toArray(new CompletableFuture[0])).join();
-							}
 						} else {
 							if (countMaxInParallel
 									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
