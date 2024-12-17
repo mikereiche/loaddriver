@@ -1,5 +1,6 @@
 package com.example.load;
 
+import com.couchbase.client.java.query.QueryScanConsistency;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -150,6 +151,8 @@ public class LoadThread implements Runnable {
 		// cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
 		Scheduler pScheduler = null;
 		long timeOffset = 0;
+		final String uuidStr = UUID.randomUUID().toString();
+		final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
 		try {
 
 			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
@@ -158,9 +161,6 @@ public class LoadThread implements Runnable {
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<>()); // linked list is cheaper to extend than ArrayList
 			recordings.put("thresholds", new LinkedList<>()); // linked list is cheaper to extend than
-			// ArrayList
-			final String uuidStr = UUID.randomUUID().toString();
-			final String uuid = uuidStr.substring(uuidStr.lastIndexOf("-") + 1);
 			count = 0;
 			sum = 0;
 
@@ -329,6 +329,10 @@ public class LoadThread implements Runnable {
 				recordings.get("average").add(new Recording(getThreadName(), "avg", count, sum / count, 999999999));
 			}
 			latch.countDown();
+			if(kvInsert) {
+				String statement = "delete from `"+bucketName+"` where meta().id like '"+uuid+"%'";
+				QueryResult qr = cluster.query(statement, QueryOptions.queryOptions().scanConsistency(QueryScanConsistency.REQUEST_PLUS));
+			}
 			if (collection == null) {
 				cluster.close();
 			}

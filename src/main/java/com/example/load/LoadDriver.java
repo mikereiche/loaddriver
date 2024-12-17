@@ -186,14 +186,12 @@ public class LoadDriver {
 		}
 		if (operationType.equals("get")) {
 			Duration to = Duration.ofMillis(timeoutUs / 1000L);
-			AtomicInteger inflight = new AtomicInteger();
 			Flux.fromIterable(List.of(keys)).parallel().runOn(Schedulers.boundedElastic()).flatMap(k -> {
 				ExistsResult exr = collection.exists(k, ExistsOptions.existsOptions().timeout(to));
 				if (exr.exists()) {
 					collection.remove(k, RemoveOptions.removeOptions().timeout(to));
 				}
 				collection.insert(k, document, InsertOptions.insertOptions().timeout(to));
-				inflight.decrementAndGet();
 				return Flux.empty();
 			}).sequential().blockLast();
 		}
@@ -274,9 +272,6 @@ public class LoadDriver {
 			e.printStackTrace();
 		}
 
-		if (countMaxInParallel)
-			System.out.println("maxInRequestsInParallel: " + LoadThread.maxRequestsInParallel);
-
 		long count = 0;
 
 		Recording max = new Recording();
@@ -347,7 +342,18 @@ public class LoadDriver {
 		r.append(", avg: " + sum / 1000 / count);
 		r.append(", rq/s/thread: " + count / runSeconds / nThreads);
 
+		if (countMaxInParallel)
+			System.out.println("maxInRequestsInParallel: " + LoadThread.maxRequestsInParallel);
+
 		System.out.println(r + ", " + p);
+
+		if (operationType.equals("get")) {
+			Duration to = Duration.ofMillis(timeoutUs / 1000L);
+			Flux.fromIterable(List.of(keys)).parallel().runOn(Schedulers.boundedElastic()).flatMap(k -> {
+					collection.remove(k, RemoveOptions.removeOptions().timeout(to));
+				return Flux.empty();
+			}).sequential().blockLast();
+		}
 	}
 
 	private static byte[] asciify(byte[] someBytes) {
