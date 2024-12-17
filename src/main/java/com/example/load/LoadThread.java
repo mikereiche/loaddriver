@@ -36,7 +36,6 @@ import com.couchbase.client.java.kv.MutationResult;
 import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryResult;
 
-
 public class LoadThread implements Runnable {
 	private static final JsonObject EMPTY_JSON_OBJECT = JsonObject.create();
 	long endTime;
@@ -110,11 +109,11 @@ public class LoadThread implements Runnable {
 		return l.get(0); // l != null ? l.get(0) : new Recording();
 	}
 
-	public LoadThread(Cluster cluster, String bucketName, Collection collection,
-			String[] keys, long runSeconds, int nRequestsPerSecond, long timeoutUs, long thresholdUs,
-			CountDownLatch latch, Semaphore rateSemaphore, long[] baseTime, boolean logTimeout, boolean logMax,
-			boolean logThreshold, boolean asObject, boolean kvGet, boolean kvInsert, int messageSize,
-			Execution execution, int batchSize, boolean countMaxInParallel, boolean sameId) {
+	public LoadThread(Cluster cluster, String bucketName, Collection collection, String[] keys, long runSeconds,
+			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
+			long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asObject, boolean kvGet,
+			boolean kvInsert, int messageSize, Execution execution, int batchSize, boolean countMaxInParallel,
+			boolean sameId) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -157,7 +156,7 @@ public class LoadThread implements Runnable {
 
 	public void run() {
 
-		//cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
+		// cluster.bucket(bucketName).waitUntilReady(Duration.ofSeconds(10));
 		Scheduler pScheduler = null;
 		long timeOffset = 0;
 		try {
@@ -203,8 +202,8 @@ public class LoadThread implements Runnable {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
-								Mono<GetResult> mrMono = collection.reactive().get(keys[sameId ? 0 : count % keys.length],
-										(GetOptions) options);
+								Mono<GetResult> mrMono = collection.reactive()
+										.get(keys[sameId ? 0 : count % keys.length], (GetOptions) options);
 								return mrMono;
 							}).map(result -> {
 								if (countMaxInParallel)
@@ -263,6 +262,27 @@ public class LoadThread implements Runnable {
 								return mr.mutationToken();
 							}).collectList().block();
 							count = count + batchSize;
+						} else if (execution.isAsync()) {
+
+							List<CompletableFuture<Object>> futures = new LinkedList<>();
+							for (int i = 0; i < batchSize; i++) {
+								if (countMaxInParallel
+										&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
+									maxRequestsInParallel.set(requestsInParallel.get());
+								}
+								count++;
+								CompletableFuture<Object> f = collection.async()
+										.insert(key(uuid, reactiveCount.getAndIncrement()), message,
+												(InsertOptions) options)
+										.thenApply(result -> {
+											if (countMaxInParallel)
+												requestsInParallel.decrementAndGet();
+											return result;
+										});
+								futures.add(f);
+							}
+							CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
 						} else {
 							if (countMaxInParallel
 									&& requestsInParallel.incrementAndGet() > maxRequestsInParallel.get()) {
@@ -276,8 +296,8 @@ public class LoadThread implements Runnable {
 					} else {
 						count++;
 						QueryResult qr = cluster.query("SELECT * from `travel-sample` where id = ?",
-								QueryOptions.queryOptions()
-										.parameters(JsonArray.create().add(keys[sameId ? 0 : count % keys.length].split("_")[1])));
+								QueryOptions.queryOptions().parameters(
+										JsonArray.create().add(keys[sameId ? 0 : count % keys.length].split("_")[1])));
 						qr.rowsAsObject();
 					}
 				} catch (UnambiguousTimeoutException e) {
@@ -328,24 +348,24 @@ public class LoadThread implements Runnable {
 		return uuid + String.format("%1$8d", count).replace(" ", "0");
 	}
 
-	Object decode(GetResult result){
-		if(!asObject){
+	Object decode(GetResult result) {
+		if (!asObject) {
 			return EMPTY_JSON_OBJECT;
 		}
 		Transcoder tc = cluster.environment().transcoder();
-		if(tc == RawStringTranscoder.INSTANCE )
+		if (tc == RawStringTranscoder.INSTANCE)
 			return result.contentAs(String.class);
 
-		if(tc == RawJsonTranscoder.INSTANCE  || tc == RawBinaryTranscoder.INSTANCE)
+		if (tc == RawJsonTranscoder.INSTANCE || tc == RawBinaryTranscoder.INSTANCE)
 			return result.contentAs(byte[].class);
 
-		if(cluster.environment().transcoder() == SerializableTranscoder.INSTANCE )
+		if (cluster.environment().transcoder() == SerializableTranscoder.INSTANCE)
 			return result.contentAsObject(); // it was saved as a String
 
 		return result.contentAsObject();
 	}
 
-	Cluster cluster(){
+	Cluster cluster() {
 		return cluster;
 	}
 }

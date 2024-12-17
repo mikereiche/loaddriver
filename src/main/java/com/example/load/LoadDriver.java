@@ -57,7 +57,7 @@ public class LoadDriver {
 		boolean shareCluster = true;
 		long gcIntervalMs = 0;
 		int kvEventLoopThreadCount = 0;
-		boolean sameId=false;
+		boolean sameId = false;
 		String username = "Administrator";
 		String password = "password";
 		String cbUrl = "localhost";
@@ -174,12 +174,14 @@ public class LoadDriver {
 			throw new RuntimeException("unknown transcoder " + transcoder);
 		}
 
-		System.err.println("encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document) : document.toString().length())/*+ " "+ document*/);
+		System.err.println(
+				"encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document)
+						: document.toString().length())/*+ " "+ document*/);
 
 		if (keys == null) {
 			keys = new String[batchSize];
 			for (int i = 0; i < batchSize; i++) {
-				keys[i] = String.format("%05d",i);
+				keys[i] = String.format("%05d", i);
 			}
 		}
 		if (operationType.equals("get")) {
@@ -282,9 +284,10 @@ public class LoadDriver {
 		long sum = 0;
 		if (cluster != null) {
 			cluster.close();
+			cluster = null;
 		}
 		for (int i = 0; i < nThreads; i++) {
-			if (shareCluster) {
+			if (!shareCluster) {
 				loads[i].cluster().close();
 			}
 			if (loads[i].getCount() == 0)
@@ -345,11 +348,10 @@ public class LoadDriver {
 		r.append(", rq/s/thread: " + count / runSeconds / nThreads);
 
 		System.out.println(r + ", " + p);
-		System.exit(0); // had to add this after adding pScheduler in LoadThread
 	}
 
 	private static byte[] asciify(byte[] someBytes) {
-		for(int i=0; i< someBytes.length; i++) {
+		for (int i = 0; i < someBytes.length; i++) {
 			someBytes[i] = (byte) (Math.abs(someBytes[i]) % ('z' - ' ') + ' ');
 		}
 		return someBytes;
@@ -361,7 +363,8 @@ public class LoadDriver {
 
 		ClusterEnvironment.Builder builder = ClusterEnvironment.builder();
 
-		//builder.transactionsConfig( tc -> tc.cleanupConfig( cc -> cc.cleanupLostAttempts(false).cleanupClientAttempts(false) ));
+		// builder.transactionsConfig( tc -> tc.cleanupConfig( cc ->
+		// cc.cleanupLostAttempts(false).cleanupClientAttempts(false) ));
 		// builder.ioConfig( ioc -> ioc.captureTraffic(ServiceType.KV));
 
 		builder.ioConfig(io -> io.numKvConnections(nKvConnections));
