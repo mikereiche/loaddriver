@@ -1,9 +1,5 @@
 package com.example.load;
 
-import com.couchbase.client.java.codec.RawBinaryTranscoder;
-import com.couchbase.client.java.codec.RawStringTranscoder;
-import com.couchbase.client.java.codec.SerializableTranscoder;
-import com.couchbase.client.java.codec.Transcoder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -16,7 +12,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,7 +22,11 @@ import com.couchbase.client.core.msg.kv.MutationToken;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.Collection;
 import com.couchbase.client.java.CommonOptions;
+import com.couchbase.client.java.codec.RawBinaryTranscoder;
 import com.couchbase.client.java.codec.RawJsonTranscoder;
+import com.couchbase.client.java.codec.RawStringTranscoder;
+import com.couchbase.client.java.codec.SerializableTranscoder;
+import com.couchbase.client.java.codec.Transcoder;
 import com.couchbase.client.java.json.JsonArray;
 import com.couchbase.client.java.json.JsonObject;
 import com.couchbase.client.java.kv.GetOptions;
@@ -223,14 +222,14 @@ public class LoadThread implements Runnable {
 									maxRequestsInParallel.set(requestsInParallel.get());
 								}
 								count++;
-								CompletableFuture<Object> f =
-									collection.async().get(keys[sameId ? 0 : count % keys.length],
-										(GetOptions) options).thenApply( result -> {
-									Object obj = decode(result);
-									if (countMaxInParallel)
-										requestsInParallel.decrementAndGet();
-									return obj;
-								});
+								CompletableFuture<Object> f = collection.async()
+										.get(keys[sameId ? 0 : count % keys.length], (GetOptions) options)
+										.thenApply(result -> {
+											Object obj = decode(result);
+											if (countMaxInParallel)
+												requestsInParallel.decrementAndGet();
+											return obj;
+										});
 								futures.add(f);
 							}
 							CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
