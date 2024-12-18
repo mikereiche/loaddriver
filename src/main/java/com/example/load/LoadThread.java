@@ -106,7 +106,7 @@ public class LoadThread implements Runnable {
 
 	public Recording getRecording(String key) {
 		List<Recording> l = recordings.get(key);
-		return l.get(0); // l != null ? l.get(0) : new Recording();
+		return  l != null ? l.get(0) : null;
 	}
 
 	public LoadThread(Cluster cluster, String bucketName, Collection collection, String[] keys, long runSeconds,

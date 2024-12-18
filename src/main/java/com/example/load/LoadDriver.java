@@ -175,8 +175,8 @@ public class LoadDriver {
 		}
 
 		System.err.println(
-				"encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document)
-						: document.toString().length())/*+ " "+ document*/);
+				"encoded message length is: " + transcoder.instance != null ? transcoder.instance.encode(document).encoded().length
+						: document.toString().length());
 
 		if (keys == null) {
 			keys = new String[batchSize];
@@ -277,6 +277,15 @@ public class LoadDriver {
 		Recording max = new Recording();
 		List<Recording> allRecordings = new ArrayList<>();
 		long sum = 0;
+
+		if (operationType.equals("get")) {
+			Duration to = Duration.ofMillis(timeoutUs / 1000L);
+			Flux.fromIterable(List.of(keys)).parallel().runOn(Schedulers.boundedElastic()).flatMap(k -> {
+				collection.remove(k, RemoveOptions.removeOptions().timeout(to));
+				return Flux.empty();
+			}).sequential().blockLast();
+		}
+
 		if (cluster != null) {
 			cluster.close();
 			cluster = null;
@@ -296,7 +305,10 @@ public class LoadDriver {
 			// reconstitute the total execution time and aggregate
 			sum = sum + avg.count * avg.value;
 			// save the max of all threads
-			max = loads[i].getRecording("max").getValue() > max.getValue() ? loads[i].getRecording("max") : max;
+			Recording loadMax = loads[i].getRecording("max");
+			if (loadMax != null) {
+				max = loadMax.getValue() > max.getValue() ? loadMax : max;
+			}
 		}
 
 		// sort recordings chronologically
@@ -343,17 +355,10 @@ public class LoadDriver {
 		r.append(", rq/s/thread: " + count / runSeconds / nThreads);
 
 		if (countMaxInParallel)
-			System.out.println("maxInRequestsInParallel: " + LoadThread.maxRequestsInParallel);
+			r.append(", maxInRequestsInParallel: " + LoadThread.maxRequestsInParallel);
 
 		System.out.println(r + ", " + p);
 
-		if (operationType.equals("get")) {
-			Duration to = Duration.ofMillis(timeoutUs / 1000L);
-			Flux.fromIterable(List.of(keys)).parallel().runOn(Schedulers.boundedElastic()).flatMap(k -> {
-					collection.remove(k, RemoveOptions.removeOptions().timeout(to));
-				return Flux.empty();
-			}).sequential().blockLast();
-		}
 	}
 
 	private static byte[] asciify(byte[] someBytes) {
