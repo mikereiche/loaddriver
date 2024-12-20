@@ -121,7 +121,7 @@ public class LoadDriver {
 			else if ("--durability".equals(args[argc]))
 				durability = DurabilityLevel.decodeFromManagementApi(args[++argc]);
 			  if(!args[argc].equals("none") && durability == DurabilityLevel.NONE){
-					throw new RuntimeException("--durability must not a know value "+args[argc]);
+					throw new RuntimeException("--durability not a known value "+args[argc]);
 				}
 			else if ("--sharecluster".equals(args[argc]))
 				shareCluster = Boolean.valueOf(args[++argc]);
