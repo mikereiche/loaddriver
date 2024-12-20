@@ -1,5 +1,6 @@
 package com.example.load;
 
+import com.couchbase.client.core.msg.kv.DurabilityLevel;
 import com.couchbase.client.java.query.QueryScanConsistency;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -57,6 +58,7 @@ public class LoadThread implements Runnable {
 	Execution execution;
 	int batchSize;
 	boolean countMaxInParallel;
+	DurabilityLevel durability;
 
 	int count = 0;
 	long sum = 0;
@@ -113,7 +115,7 @@ public class LoadThread implements Runnable {
 			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
 			long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asObject, boolean kvGet,
 			boolean kvInsert, Object message, Execution execution, int batchSize, boolean countMaxInParallel,
-			boolean sameId) {
+			boolean sameId, DurabilityLevel durability) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -136,6 +138,7 @@ public class LoadThread implements Runnable {
 		this.bucketName = bucketName;
 		this.collection = collection;
 		this.sameId = sameId;
+		this.durability = durability;
 
 	}
 
@@ -157,6 +160,10 @@ public class LoadThread implements Runnable {
 
 			CommonOptions options = kvGet ? GetOptions.getOptions().timeout(Duration.ofNanos(timeoutUs * 1000))
 					: InsertOptions.insertOptions().timeout(Duration.ofNanos(timeoutUs * 1000));
+
+			if(options instanceof InsertOptions){
+				((InsertOptions) options).durability(durability);
+			}
 
 			maxRecording = new Recording();
 			recordings.put("timeouts", new LinkedList<>()); // linked list is cheaper to extend than ArrayList
@@ -330,8 +337,13 @@ public class LoadThread implements Runnable {
 			}
 			latch.countDown();
 			if(kvInsert) {
-				String statement = "delete from `"+bucketName+"` where meta().id like '"+uuid+"%'";
-				QueryResult qr = cluster.query(statement, QueryOptions.queryOptions().scanConsistency(QueryScanConsistency.REQUEST_PLUS));
+				try {
+					String statement = "delete from `" + bucketName + "` where meta().id like '" + uuid + "%'";
+					QueryResult qr = cluster.query(statement,
+						QueryOptions.queryOptions().timeout(Duration.ofSeconds(300)).scanConsistency(QueryScanConsistency.REQUEST_PLUS));
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
 			}
 			if (collection == null) {
 				cluster.close();

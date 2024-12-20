@@ -15,6 +15,7 @@ import java.util.logging.Logger;
 
 import com.couchbase.client.core.diagnostics.EndpointDiagnostics;
 import com.couchbase.client.core.env.ThresholdLoggingTracerConfig;
+import com.couchbase.client.core.msg.kv.DurabilityLevel;
 import com.couchbase.client.core.service.ServiceType;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
@@ -55,6 +56,7 @@ public class LoadDriver {
 		boolean countMaxInParallel = false;
 		boolean virtualThreads = false;
 		boolean shareCluster = true;
+		DurabilityLevel durability = DurabilityLevel.NONE;
 		long gcIntervalMs = 0;
 		int kvEventLoopThreadCount = 0;
 		boolean sameId = false;
@@ -116,6 +118,11 @@ public class LoadDriver {
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--asobject".equals(args[argc]))
 				asObject = Boolean.valueOf(args[++argc]);
+			else if ("--durability".equals(args[argc]))
+				durability = DurabilityLevel.decodeFromManagementApi(args[++argc]);
+			  if(!args[argc].equals("none") && durability == DurabilityLevel.NONE){
+					throw new RuntimeException("--durability must not a know value "+args[argc]);
+				}
 			else if ("--sharecluster".equals(args[argc]))
 				shareCluster = Boolean.valueOf(args[++argc]);
 			else if ("--sameid".equals(args[argc]))
@@ -175,8 +182,8 @@ public class LoadDriver {
 		}
 
 		System.err.println(
-				"encoded message length is: " + transcoder.instance != null ? transcoder.instance.encode(document).encoded().length
-						: document.toString().length());
+				"encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document).encoded().length
+						: document.toString().length()));
 
 		if (keys == null) {
 			keys = new String[batchSize];
@@ -219,7 +226,7 @@ public class LoadDriver {
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
 			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
-					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId);
+					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId, durability);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
@@ -346,6 +353,7 @@ public class LoadDriver {
 		p.append(", sameId: " + sameId);
 		p.append(", shareCluster: " + shareCluster);
 		p.append(", operationType: " + operationType);
+		p.append(", durability: " + durability);
 
 		StringBuffer r = new StringBuffer();
 		r.append("count: " + count);
@@ -450,6 +458,7 @@ public class LoadDriver {
 		System.err.println("	--asobject <true|false>");
 		System.err.println("	--sameid <true|false>");
 		System.err.println("	--transcoder rawjson|rawbinary|rawstring|serializable");
+		System.err.println("	--durability none|majority|majorityPersistToActive|persistToMajority|");
 		System.err.println("	--key <key> [ --key <key> ...]");
 		System.err.println(
 				"	--operationtype [ get | insert | query ] # CREATE INDEX `def_id` ON `travel-sample`(`id`) ");
