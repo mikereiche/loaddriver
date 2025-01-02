@@ -118,12 +118,12 @@ public class LoadDriver {
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--asobject".equals(args[argc]))
 				asObject = Boolean.valueOf(args[++argc]);
-			else if ("--durability".equals(args[argc]))
+			else if ("--durability".equals(args[argc])) {
 				durability = DurabilityLevel.decodeFromManagementApi(args[++argc]);
-			  if(!args[argc].equals("none") && durability == DurabilityLevel.NONE){
-					throw new RuntimeException("--durability not a known value "+args[argc]);
+				if (!args[argc].equals("none") && durability == DurabilityLevel.NONE) {
+					throw new RuntimeException("--durability not a known value " + args[argc]);
 				}
-			else if ("--sharecluster".equals(args[argc]))
+			} else if ("--sharecluster".equals(args[argc]))
 				shareCluster = Boolean.valueOf(args[++argc]);
 			else if ("--sameid".equals(args[argc]))
 				sameId = Boolean.valueOf(args[++argc]);
@@ -181,8 +181,8 @@ public class LoadDriver {
 			throw new RuntimeException("unknown transcoder " + transcoder);
 		}
 
-		System.err.println(
-				"encoded message length is: " + (transcoder.instance != null ? transcoder.instance.encode(document).encoded().length
+		System.err.println("encoded message length is: "
+				+ (transcoder.instance != null ? transcoder.instance.encode(document).encoded().length
 						: document.toString().length()));
 
 		if (keys == null) {
@@ -226,7 +226,8 @@ public class LoadDriver {
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
 			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
-					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId, durability);
+					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId,
+					durability);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
