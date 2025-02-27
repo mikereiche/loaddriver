@@ -50,6 +50,7 @@ public class LoadThread implements Runnable {
 	Semaphore rateSemaphore;
 	long[] baseTime;
 	boolean logMax;
+	boolean cleanup;
 	boolean logTimeout;
 	boolean logThreshold;
 	boolean asObject;
@@ -94,6 +95,10 @@ public class LoadThread implements Runnable {
 		this.logMax = logMax;
 	}
 
+	public void setCleanup(boolean cleanup) {
+		this.cleanup = cleanup;
+	}
+
 	public void setLogThreshold(boolean logThreshold) {
 		this.logThreshold = logThreshold;
 	}
@@ -115,7 +120,7 @@ public class LoadThread implements Runnable {
 			int nRequestsPerSecond, long timeoutUs, long thresholdUs, CountDownLatch latch, Semaphore rateSemaphore,
 			long[] baseTime, boolean logTimeout, boolean logMax, boolean logThreshold, boolean asObject, boolean kvGet,
 			boolean kvInsert, Object message, Execution execution, int batchSize, boolean countMaxInParallel,
-			boolean sameId, DurabilityLevel durability) {
+			boolean sameId, DurabilityLevel durability, boolean cleanup) {
 		this.keys = keys;
 		this.runSeconds = runSeconds;
 		this.nRequestsPerSecond = nRequestsPerSecond;
@@ -139,6 +144,7 @@ public class LoadThread implements Runnable {
 		this.collection = collection;
 		this.sameId = sameId;
 		this.durability = durability;
+		this.cleanup = cleanup;
 
 	}
 
@@ -336,7 +342,7 @@ public class LoadThread implements Runnable {
 				recordings.get("average").add(new Recording(getThreadName(), "avg", count, sum / count, 999999999));
 			}
 			latch.countDown();
-			if(kvInsert) {
+			if(kvInsert && cleanup) {
 				try {
 					String statement = "delete from `" + bucketName + "` where meta().id like '" + uuid + "%'";
 					QueryResult qr = cluster.query(statement,
@@ -346,6 +352,7 @@ public class LoadThread implements Runnable {
 				}
 			}
 			if (collection == null) {
+                                System.err.println("closing cluster "+cluster);
 				cluster.close();
 			}
 		}

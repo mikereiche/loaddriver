@@ -17,6 +17,7 @@ import com.couchbase.client.core.diagnostics.EndpointDiagnostics;
 import com.couchbase.client.core.env.ThresholdLoggingTracerConfig;
 import com.couchbase.client.core.msg.kv.DurabilityLevel;
 import com.couchbase.client.core.service.ServiceType;
+import com.couchbase.client.core.util.StorageSize;
 import com.couchbase.client.java.Cluster;
 import com.couchbase.client.java.ClusterOptions;
 import com.couchbase.client.java.Collection;
@@ -44,6 +45,7 @@ public class LoadDriver {
 		int timeoutUs = 2500000;
 		int messageSize = 2;
 		int schedulerThreadCount = 0;
+		StorageSize sendBuffer = null;
 		Execution execution = Execution.reactive;
 		Transcoder transcoder = Transcoder.json;
 		int batchSize = 128;
@@ -56,6 +58,7 @@ public class LoadDriver {
 		boolean countMaxInParallel = false;
 		boolean virtualThreads = false;
 		boolean shareCluster = true;
+		boolean cleanup = true;
 		DurabilityLevel durability = DurabilityLevel.NONE;
 		long gcIntervalMs = 0;
 		int kvEventLoopThreadCount = 0;
@@ -90,6 +93,8 @@ public class LoadDriver {
 				messageSize = Integer.parseInt(args[++argc]);
 			else if ("--schedulerthreadcount".equals(args[argc]))
 				schedulerThreadCount = Integer.parseInt(args[++argc]);
+			else if ("--buffersize".equals(args[argc]))
+				sendBuffer = StorageSize.parse(args[++argc]);
 			else if ("--batchsize".equals(args[argc]))
 				batchSize = Integer.parseInt(args[++argc]);
 			else if ("--execution".equals(args[argc]))
@@ -118,6 +123,8 @@ public class LoadDriver {
 				logThreshold = Boolean.valueOf(args[++argc]);
 			else if ("--asobject".equals(args[argc]))
 				asObject = Boolean.valueOf(args[++argc]);
+			else if ("--cleanup".equals(args[argc]))
+				cleanup = Boolean.valueOf(args[++argc]);
 			else if ("--durability".equals(args[argc])) {
 				durability = DurabilityLevel.decodeFromManagementApi(args[++argc]);
 				if (!args[argc].equals("none") && durability == DurabilityLevel.NONE) {
@@ -146,7 +153,7 @@ public class LoadDriver {
 		if (!keysList.isEmpty())
 			keys = keysList.toArray(new String[] {});
 
-		Cluster cluster = getCluster(cbUrl, username, password, bucketname, nKvConnections, kvEventLoopThreadCount,
+		Cluster cluster = getCluster(cbUrl, username, password, bucketname, nKvConnections, sendBuffer, kvEventLoopThreadCount,
 				schedulerThreadCount, thresholdUs, transcoder, shareCluster ? nThreads : 0);
 		System.err.println(cluster.environment());
 		Collection collection = cluster.bucket(bucketname).defaultCollection();
@@ -221,13 +228,13 @@ public class LoadDriver {
 		for (int i = 0; i < nThreads; i++) {
 			// we'll run for 2 seconds before making our measurement, not using rateSemaphore
 			Cluster theCluster = shareCluster ? cluster
-					: getCluster(cbUrl, username, password, bucketname, nKvConnections, kvEventLoopThreadCount,
+					: getCluster(cbUrl, username, password, bucketname, nKvConnections, sendBuffer, kvEventLoopThreadCount,
 							schedulerThreadCount, thresholdUs, transcoder, 0);
 			Collection theCollection = theCluster.bucket(bucketname).defaultCollection();
 			loads[i] = new LoadThread(theCluster, bucketname, theCollection, keys, 2, nRequestsPerSecond, timeoutUs,
 					thresholdUs, latch, null, baseTime, false, false, false, asObject, operationType.equals("get"),
 					operationType.equals("insert"), document, execution, batchSize, countMaxInParallel, sameId,
-					durability);
+					durability, true /* always cleanup the warmup */);
 			(new ThreadWrapper(loads[i], virtualThreads)).start();
 		}
 
@@ -253,6 +260,7 @@ public class LoadDriver {
 			loads[i].setLogMax(logMax);
 			loads[i].setLogThreshold(logThreshold);
 			loads[i].setLogTimeout(logTimeout);
+			loads[i].setCleanup(cleanup);
 			threads[i] = new ThreadWrapper(loads[i], virtualThreads);
 			sleep(1); // stagger the start
 			threads[i].start();
@@ -378,8 +386,9 @@ public class LoadDriver {
 	}
 
 	static Cluster getCluster(String cbUrl, String username, String password, String bucketName, int nKvConnections,
-			int kvEventLoopThreadCount, int schedulerThreadCount, long thresholdUs, Transcoder transcoder,
-			int maxHttpConnections) {
+														StorageSize sendBuffer, int kvEventLoopThreadCount, int schedulerThreadCount,
+														long thresholdUs, Transcoder transcoder,
+														int maxHttpConnections) {
 
 		ClusterEnvironment.Builder builder = ClusterEnvironment.builder();
 
@@ -396,6 +405,15 @@ public class LoadDriver {
 		if (schedulerThreadCount != 0) {
 			builder.schedulerThreadCount(schedulerThreadCount);
 		}
+		if (sendBuffer != null) {
+			builder.ioConfig(ioc -> ioc.sendBuffer(sendBuffer));
+			builder.ioConfig(ioc -> ioc.highWaterMark(StorageSize.ofBytes(sendBuffer.bytes()-1024)));
+			builder.ioConfig(ioc -> ioc.lowWaterMark(StorageSize.ofBytes(sendBuffer.bytes()/2)));
+			System.err.println("sendBuffer                           : "+builder.ioConfig().build().sendBuffer());
+			System.err.println("lowWater  (computed from sendBUffer) : "+builder.ioConfig().build().lowWaterMark());
+			System.err.println("highWater (computed from sendBuffer) : "+builder.ioConfig().build().highWaterMark());
+		}
+
 		if (cbUrl.startsWith("couchbases")) {
 			builder.securityConfig(sc -> sc.enableTls(true));
 		}
